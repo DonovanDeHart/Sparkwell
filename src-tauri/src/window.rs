@@ -29,9 +29,11 @@ pub fn main_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
 /// Snaps the window to the right edge of the target monitor's work area.
 pub fn dock<R: Runtime>(window: &WebviewWindow<R>) {
     let Some(area) = target_work_area(window) else {
+        log::warn!("no monitor work area available; showing without docking");
         return;
     };
     let rect = dock_rect(&area);
+    log::info!("docking to {area:?} -> {rect:?}");
     let size = PhysicalSize::new(rect.width, rect.height);
     let pos = PhysicalPosition::new(rect.x, rect.y);
     // Size, move, then size again: moving between monitors with different DPI
@@ -55,9 +57,13 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
         *t = Instant::now();
     }
     let _ = window.set_always_on_top(state.is_pinned());
-    let _ = window.show();
+    if let Err(e) = window.show() {
+        log::warn!("failed to show the sidebar: {e}");
+    }
     let _ = window.unminimize();
-    let _ = window.set_focus();
+    if let Err(e) = window.set_focus() {
+        log::warn!("failed to focus the sidebar: {e}");
+    }
     let _ = app.emit(EVENT_SHOWN, !was_visible);
     crate::ai::on_panel_shown(app);
 }

@@ -39,6 +39,23 @@ public static class Win {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+  // Top-level windows belonging to any of the given process ids.
+  public static System.Collections.Generic.List<IntPtr> WindowsOf(uint[] pids) {
+    var found = new System.Collections.Generic.List<IntPtr>();
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (Array.IndexOf(pids, pid) >= 0) found.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  public static string Title(IntPtr h) { var s = new System.Text.StringBuilder(256); GetWindowText(h, s, 256); return s.ToString(); }
+  public static string Class(IntPtr h) { var s = new System.Text.StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
 }
 "@
 [Win]::SetProcessDPIAware() | Out-Null
@@ -48,7 +65,36 @@ function Check([bool]$ok, [string]$what) {
   if ($ok) { Write-Host "PASS  $what" } else { Write-Host "FAIL  $what"; $failures.Add($what) }
 }
 
-function Find-Sparkwell { [Win]::FindWindow($null, 'Sparkwell') }
+function Sparkwell-Pids { [uint32[]]@(Get-Process -Name 'sparkwell' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }) }
+
+# The sidebar: the process's top-level window titled "Sparkwell". Helper
+# windows (tray, event loop) may share the title but are never visible, so
+# prefer a visible one. Returns IntPtr.Zero when none exists.
+function Find-Sparkwell {
+  $pids = Sparkwell-Pids
+  if ($pids.Count -eq 0) { return [IntPtr]::Zero }
+  $candidates = @([Win]::WindowsOf($pids) | Where-Object { [Win]::Title($_) -eq 'Sparkwell' })
+  $visible = @($candidates | Where-Object { [Win]::IsWindowVisible($_) })
+  if ($visible.Count -gt 0) { return $visible[0] }
+  if ($candidates.Count -gt 0) { return $candidates[0] }
+  return [IntPtr]::Zero
+}
+
+function Dump-Windows([string]$label) {
+  Write-Host "--- top-level windows of Sparkwell ($label)"
+  foreach ($h in [Win]::WindowsOf((Sparkwell-Pids))) {
+    $r = New-Object Win+RECT
+    [Win]::GetWindowRect($h, [ref]$r) | Out-Null
+    Write-Host ("  0x{0:X} class='{1}' title='{2}' visible={3} rect=({4},{5})-({6},{7})" -f $h.ToInt64(), [Win]::Class($h), [Win]::Title($h), [Win]::IsWindowVisible($h), $r.Left, $r.Top, $r.Right, $r.Bottom)
+  }
+}
+
+function Save-FullScreenshot([string]$name) {
+  $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+  $r = New-Object Win+RECT
+  $r.Left = $b.Left; $r.Top = $b.Top; $r.Right = $b.Right; $r.Bottom = $b.Bottom
+  Save-Screenshot $name $r
+}
 
 function Wait-Until([scriptblock]$cond, [int]$seconds = 20) {
   $deadline = (Get-Date).AddSeconds($seconds)
@@ -111,6 +157,7 @@ $log = Join-Path $env:LOCALAPPDATA 'com.sparkwell.app\logs\Sparkwell.log'
 $proc = Start-Process -FilePath $exe.FullName -PassThru
 $appeared = Wait-Until { $h = Find-Sparkwell; $h -ne [IntPtr]::Zero -and [Win]::IsWindowVisible($h) } 30
 Check $appeared 'sidebar window appears on launch'
+if (-not $appeared) { Dump-Windows 'after launch'; Save-FullScreenshot 'launch-fullscreen.png' }
 Check (-not $proc.HasExited) 'process keeps running'
 Check (Wait-Until { Test-Path $library } 10) "library created at $library"
 if (Test-Path $library) { Check ((Get-Item $library).Length -gt 0) 'library file is non-empty' }
