@@ -71,7 +71,8 @@ function Sparkwell-Pids { [uint32[]]@(Get-Process -Name 'sparkwell' -ErrorAction
 # windows (tray, event loop) may share the title but are never visible, so
 # prefer a visible one. Returns IntPtr.Zero when none exists.
 function Find-Sparkwell {
-  $pids = Sparkwell-Pids
+  # @() + cast: a function returning an empty or single-item array unrolls it.
+  $pids = [uint32[]]@(Sparkwell-Pids)
   if ($pids.Count -eq 0) { return [IntPtr]::Zero }
   $candidates = @([Win]::WindowsOf($pids) | Where-Object { [Win]::Title($_) -eq 'Sparkwell' })
   $visible = @($candidates | Where-Object { [Win]::IsWindowVisible($_) })
@@ -82,7 +83,7 @@ function Find-Sparkwell {
 
 function Dump-Windows([string]$label) {
   Write-Host "--- top-level windows of Sparkwell ($label)"
-  foreach ($h in [Win]::WindowsOf((Sparkwell-Pids))) {
+  foreach ($h in [Win]::WindowsOf([uint32[]]@(Sparkwell-Pids))) {
     $r = New-Object Win+RECT
     [Win]::GetWindowRect($h, [ref]$r) | Out-Null
     Write-Host ("  0x{0:X} class='{1}' title='{2}' visible={3} rect=({4},{5})-({6},{7})" -f $h.ToInt64(), [Win]::Class($h), [Win]::Title($h), [Win]::IsWindowVisible($h), $r.Left, $r.Top, $r.Right, $r.Bottom)
