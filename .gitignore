@@ -1,0 +1,18 @@
+# Dependencies & build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Test & tooling artefacts
+coverage/
+test-results/
+playwright-report/
+*.log
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

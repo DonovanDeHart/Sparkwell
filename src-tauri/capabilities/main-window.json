@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimal permissions for the Sparkwell sidebar. All library, clipboard, hotkey, dialog and AI access happens in Rust behind typed app commands; the webview gets no filesystem, shell, SQL or HTTP capability.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}
