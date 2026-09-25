@@ -1,0 +1,172 @@
+<#
+  Sparkwell Windows smoke test (clean install -> launch -> behave -> uninstall).
+
+  Run on a Windows machine with an interactive desktop, after `npm run app:build`:
+    pwsh -File scripts/windows-smoke.ps1
+
+  Verifies, against the real packaged app:
+    1. The NSIS installer installs silently (per-user, no admin).
+    2. The app launches, creates and seeds the local library.
+    3. The window docks to the right edge of the monitor work area (taskbar excluded).
+    4. A second launch does not create a second instance.
+    5. The global activation hotkey (Ctrl+Alt+Space) hides and re-shows the panel.
+    6. The library persists across a restart.
+    7. Uninstalling never deletes the user's library.
+  A screenshot of the docked panel is written to smoke-artifacts/.
+#>
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$root = Split-Path -Parent $PSScriptRoot
+$artifacts = Join-Path $root 'smoke-artifacts'
+New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
+
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public int dwFlags; }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+  [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFO mi);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+}
+"@
+[Win]::SetProcessDPIAware() | Out-Null
+
+$failures = New-Object System.Collections.Generic.List[string]
+function Check([bool]$ok, [string]$what) {
+  if ($ok) { Write-Host "PASS  $what" } else { Write-Host "FAIL  $what"; $failures.Add($what) }
+}
+
+function Find-Sparkwell { [Win]::FindWindow($null, 'Sparkwell') }
+
+function Wait-Until([scriptblock]$cond, [int]$seconds = 20) {
+  $deadline = (Get-Date).AddSeconds($seconds)
+  while ((Get-Date) -lt $deadline) {
+    if (& $cond) { return $true }
+    Start-Sleep -Milliseconds 250
+  }
+  return $false
+}
+
+function Press-Hotkey {
+  # Ctrl+Alt+Space via injected input; RegisterHotKey responds to it like a real keypress.
+  $VK_CONTROL = 0x11; $VK_MENU = 0x12; $VK_SPACE = 0x20; $UP = 0x2
+  [Win]::keybd_event($VK_CONTROL, 0, 0, [UIntPtr]::Zero)
+  [Win]::keybd_event($VK_MENU, 0, 0, [UIntPtr]::Zero)
+  [Win]::keybd_event($VK_SPACE, 0, 0, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 60
+  [Win]::keybd_event($VK_SPACE, 0, $UP, [UIntPtr]::Zero)
+  [Win]::keybd_event($VK_MENU, 0, $UP, [UIntPtr]::Zero)
+  [Win]::keybd_event($VK_CONTROL, 0, $UP, [UIntPtr]::Zero)
+}
+
+function Save-Screenshot([string]$name, $rect) {
+  $w = [Math]::Max(1, $rect.Right - $rect.Left); $h = [Math]::Max(1, $rect.Bottom - $rect.Top)
+  $bmp = New-Object System.Drawing.Bitmap $w, $h
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
+  $path = Join-Path $artifacts $name
+  $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+  $g.Dispose(); $bmp.Dispose()
+  Write-Host "screenshot: $path"
+}
+
+# ------------------------------------------------------------------ install
+$installer = Get-ChildItem (Join-Path $root 'src-tauri/target/release/bundle/nsis') -Filter '*-setup.exe' | Select-Object -First 1
+if (-not $installer) { throw 'NSIS installer not found; run `npm run app:build` first.' }
+Write-Host "installer: $($installer.FullName)"
+Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+$installDir = Join-Path $env:LOCALAPPDATA 'Sparkwell'
+$exe = Get-ChildItem $installDir -Filter 'sparkwell*.exe' | Where-Object { $_.Name -notlike 'uninstall*' } | Select-Object -First 1
+Check ($null -ne $exe) "installer placed the app in $installDir"
+if (-not $exe) { exit 1 }
+
+$library = Join-Path $env:LOCALAPPDATA 'Sparkwell\Library\sparkwell.db'
+$log = Join-Path $env:LOCALAPPDATA 'com.sparkwell.app\logs\Sparkwell.log'
+
+# ------------------------------------------------------------------ launch
+$proc = Start-Process -FilePath $exe.FullName -PassThru
+$appeared = Wait-Until { $h = Find-Sparkwell; $h -ne [IntPtr]::Zero -and [Win]::IsWindowVisible($h) } 30
+Check $appeared 'sidebar window appears on launch'
+Check (-not $proc.HasExited) 'process keeps running'
+Check (Wait-Until { Test-Path $library } 10) "library created at $library"
+if (Test-Path $library) { Check ((Get-Item $library).Length -gt 0) 'library file is non-empty' }
+
+if ($appeared) {
+  Start-Sleep -Milliseconds 800  # let the entrance animation settle
+  $h = Find-Sparkwell
+  $r = New-Object Win+RECT
+  [Win]::GetWindowRect($h, [ref]$r) | Out-Null
+  $mi = New-Object Win+MONITORINFO
+  $mi.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($mi)
+  [Win]::GetMonitorInfo([Win]::MonitorFromWindow($h, 2), [ref]$mi) | Out-Null
+  $work = $mi.rcWork
+  Write-Host ("window  L{0} T{1} R{2} B{3}" -f $r.Left, $r.Top, $r.Right, $r.Bottom)
+  Write-Host ("work    L{0} T{1} R{2} B{3}" -f $work.Left, $work.Top, $work.Right, $work.Bottom)
+  Check ([Math]::Abs($r.Right - $work.Right) -le 1) 'docked to the right edge of the work area'
+  Check ([Math]::Abs($r.Top - $work.Top) -le 1 -and [Math]::Abs($r.Bottom - $work.Bottom) -le 1) 'spans the work area height (taskbar respected)'
+  $width = $r.Right - $r.Left
+  Check ($width -ge 380 -and $width -le 1100) "compact width ($width px)"
+  Save-Screenshot 'sparkwell-docked.png' $r
+}
+
+# ------------------------------------------------------------------ single instance
+$second = Start-Process -FilePath $exe.FullName -PassThru
+$exited = Wait-Until { $second.HasExited } 10
+Check $exited 'second launch exits (single instance)'
+$count = @(Get-Process | Where-Object { $_.Path -eq $exe.FullName }).Count
+Check ($count -eq 1) "exactly one Sparkwell process ($count)"
+
+# ------------------------------------------------------------------ global hotkey
+if ($appeared) {
+  # Visible+focused -> hide. If focus was elsewhere the first press focuses, the second hides.
+  Press-Hotkey
+  $hidden = Wait-Until { -not [Win]::IsWindowVisible((Find-Sparkwell)) } 3
+  if (-not $hidden) { Press-Hotkey; $hidden = Wait-Until { -not [Win]::IsWindowVisible((Find-Sparkwell)) } 3 }
+  Check $hidden 'activation hotkey hides the panel'
+  Press-Hotkey
+  Check (Wait-Until { [Win]::IsWindowVisible((Find-Sparkwell)) } 3) 'activation hotkey shows the panel again'
+  Check ((Find-Sparkwell) -eq [Win]::GetForegroundWindow()) 'shown panel takes keyboard focus'
+}
+
+# ------------------------------------------------------------------ restart persistence
+$before = (Get-Item $library).Length
+Stop-Process -Id $proc.Id -Force
+Start-Sleep -Seconds 1
+$proc = Start-Process -FilePath $exe.FullName -PassThru
+Check (Wait-Until { $h = Find-Sparkwell; $h -ne [IntPtr]::Zero -and [Win]::IsWindowVisible($h) } 30) 'relaunches cleanly'
+Check ((Test-Path $library) -and (Get-Item $library).Length -ge $before) 'library persists across restart'
+Stop-Process -Id $proc.Id -Force
+Start-Sleep -Seconds 1
+
+# ------------------------------------------------------------------ uninstall keeps the library
+$uninstaller = Join-Path $installDir 'uninstall.exe'
+if (Test-Path $uninstaller) {
+  Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait
+  Start-Sleep -Seconds 3
+  Check (-not (Test-Path $exe.FullName)) 'uninstaller removes the app'
+  Check (Test-Path $library) 'uninstall never deletes the Spark library'
+} else {
+  Check $false "uninstaller present at $uninstaller"
+}
+
+if (Test-Path $log) {
+  Write-Host '--- app log ---'
+  Get-Content $log -Tail 40
+  Copy-Item $log (Join-Path $artifacts 'Sparkwell.log')
+}
+
+if ($failures.Count -gt 0) {
+  Write-Host "`n$($failures.Count) smoke check(s) failed:"
+  $failures | ForEach-Object { Write-Host " - $_" }
+  exit 1
+}
+Write-Host "`nAll Windows smoke checks passed."

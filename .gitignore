@@ -16,3 +16,6 @@ playwright-report/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Windows smoke-test output
+smoke-artifacts/
