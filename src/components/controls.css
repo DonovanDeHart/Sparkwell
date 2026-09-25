@@ -1,0 +1,451 @@
+/* Shared controls. Fire = creation/copy, Ice = focus/retrieval/trust. */
+
+/* --------------------------------------------------------- Icon buttons --- */
+
+.icon-button {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #98a2ad;
+  border: 1px solid transparent;
+  transition:
+    color var(--t-fast),
+    background var(--t-fast),
+    border-color var(--t-fast);
+}
+
+.icon-button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.icon-button:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.icon-button.is-small {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.icon-button.is-active {
+  color: var(--ice);
+  background: var(--ice-wash);
+  border-color: rgba(84, 221, 235, 0.28);
+}
+
+.icon-button.is-fire.is-active,
+.icon-button.is-fire:hover {
+  color: var(--fire-gold);
+}
+
+.icon-button.is-fire.is-active {
+  background: var(--fire-wash);
+  border-color: rgba(243, 154, 61, 0.28);
+}
+
+/* -------------------------------------------------------------- Buttons --- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: var(--r-button);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.03);
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast),
+    transform 60ms;
+}
+
+.button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: #3a4757;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.button:disabled {
+  opacity: 0.5;
+}
+
+.button.is-block {
+  width: 100%;
+}
+
+.button.is-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.button.is-quiet:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: transparent;
+}
+
+.button.is-ice {
+  color: var(--ice-soft);
+  border-color: rgba(84, 221, 235, 0.4);
+  background: linear-gradient(180deg, rgba(84, 221, 235, 0.1), rgba(84, 221, 235, 0.04));
+}
+
+.button.is-ice:hover:not(:disabled) {
+  color: #d6f7fc;
+  border-color: rgba(84, 221, 235, 0.65);
+  background: linear-gradient(180deg, rgba(84, 221, 235, 0.16), rgba(84, 221, 235, 0.07));
+}
+
+.button.is-danger {
+  color: var(--danger);
+  border-color: rgba(255, 122, 112, 0.4);
+  background: var(--danger-wash);
+}
+
+.button.is-danger:hover:not(:disabled) {
+  color: #ffb1aa;
+  border-color: rgba(255, 122, 112, 0.7);
+  background: rgba(255, 122, 112, 0.16);
+}
+
+/* Fire primary: Copy Spark / Save. The visual action hero. */
+.button.is-fire {
+  color: var(--fire-text);
+  border-color: var(--fire-line);
+  background: linear-gradient(180deg, rgba(243, 154, 61, 0.17), rgba(243, 154, 61, 0.07));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 214, 150, 0.08),
+    0 8px 24px -12px rgba(243, 154, 61, 0.65);
+}
+
+.button.is-fire:hover:not(:disabled) {
+  color: #ffc574;
+  border-color: rgba(246, 180, 90, 0.95);
+  background: linear-gradient(180deg, rgba(243, 154, 61, 0.25), rgba(243, 154, 61, 0.11));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 214, 150, 0.12),
+    0 10px 28px -10px rgba(243, 154, 61, 0.8);
+}
+
+.button.is-fire:focus-visible {
+  outline-color: var(--fire-gold);
+}
+
+.button.is-large {
+  height: 44px;
+  font-size: var(--fs-md);
+  border-radius: 12px;
+}
+
+.button.is-done {
+  color: #ffd699;
+}
+
+/* ---------------------------------------------------------------- Toggle --- */
+
+.toggle {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 23px;
+  border-radius: 999px;
+  background: #253141;
+  border: 1px solid #334052;
+  transition:
+    background var(--t-med),
+    border-color var(--t-med);
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #c9d1da;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition:
+    transform var(--t-med) var(--ease-out),
+    background var(--t-med);
+}
+
+.toggle[aria-checked='true'] {
+  background: linear-gradient(90deg, #1f9fb5, var(--ice));
+  border-color: rgba(84, 221, 235, 0.7);
+}
+
+.toggle[aria-checked='true']::after {
+  transform: translateX(17px);
+  background: #ffffff;
+}
+
+.toggle:disabled {
+  opacity: 0.5;
+}
+
+/* ------------------------------------------------------------------ Chips --- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 23px;
+  padding: 0 9px;
+  border-radius: var(--r-chip);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: #aeb8c3;
+  border: 1px solid #2e3947;
+  background: rgba(255, 255, 255, 0.022);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- Keycaps --- */
+
+.keycaps {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.keycap {
+  font-family: var(--font);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+  background: linear-gradient(180deg, #1b2530, #151d27);
+  border: 1px solid #364355;
+  border-bottom-width: 2px;
+}
+
+/* ----------------------------------------------------------------- Fields --- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.field-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.field-hint {
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  border-radius: 11px;
+  border: 1px solid #2b3643;
+  background: var(--field);
+  color: var(--text);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  padding: 9px 12px;
+  transition:
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.textarea {
+  resize: none;
+  display: block;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: #66707d;
+}
+
+.input:hover,
+.textarea:hover {
+  border-color: #354253;
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: rgba(84, 221, 235, 0.6);
+  box-shadow: 0 0 0 3px rgba(84, 221, 235, 0.1), 0 0 18px -6px rgba(84, 221, 235, 0.45);
+}
+
+.field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: var(--fs-xs);
+  color: var(--danger);
+}
+
+.notice {
+  display: flex;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 11px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.notice > .icon {
+  margin-top: 1px;
+  color: var(--ice);
+}
+
+.notice.is-warning {
+  border-color: rgba(240, 178, 76, 0.4);
+  background: rgba(240, 178, 76, 0.06);
+}
+
+.notice.is-warning > .icon {
+  color: var(--fire-gold);
+}
+
+.notice.is-error {
+  border-color: rgba(255, 122, 112, 0.4);
+  background: var(--danger-wash);
+}
+
+.notice.is-error > .icon {
+  color: var(--danger);
+}
+
+.notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(84, 221, 235, 0.25);
+  border-top-color: var(--ice);
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------------------ Menu --- */
+
+.menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 170px;
+  padding: 5px;
+  border-radius: 11px;
+  background: #16202b;
+  border: 1px solid #2f3b4a;
+  box-shadow: 0 16px 36px -10px rgba(0, 0, 0, 0.7);
+  animation: toast-in 140ms var(--ease-out);
+}
+
+.menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-align: left;
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  outline: none;
+}
+
+.menu-item.is-danger {
+  color: var(--danger);
+}
+
+.menu-item.is-danger:hover,
+.menu-item.is-danger:focus-visible {
+  background: var(--danger-wash);
+  color: #ffb1aa;
+}
+
+/* Warm outline: Add New Spark. Easy to reach, secondary to Copy Spark. */
+.button.is-fire-outline {
+  color: var(--fire-text);
+  border-color: rgba(240, 160, 64, 0.62);
+  background: linear-gradient(90deg, rgba(243, 154, 61, 0.1), rgba(243, 154, 61, 0.045) 60%, rgba(243, 154, 61, 0.08));
+}
+
+.button.is-fire-outline:hover:not(:disabled) {
+  color: #ffc574;
+  border-color: rgba(246, 180, 90, 0.9);
+  background: linear-gradient(90deg, rgba(243, 154, 61, 0.17), rgba(243, 154, 61, 0.08) 60%, rgba(243, 154, 61, 0.13));
+  box-shadow: 0 8px 24px -14px rgba(243, 154, 61, 0.8);
+}
+
+.button.is-fire-outline:focus-visible {
+  outline-color: var(--fire-gold);
+}
