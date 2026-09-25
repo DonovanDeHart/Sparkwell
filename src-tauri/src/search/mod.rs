@@ -27,10 +27,25 @@ const MAX_ALTERNATIVES: usize = 3;
 /// Only the start of very long bodies is scanned for lexical coverage; the
 /// full body is still indexed by FTS for recall.
 const BODY_SCAN_CHARS: usize = 20_000;
-/// Cosine distance above the library baseline that counts as a full semantic match.
-const SEMANTIC_SPAN: f32 = 0.22;
-/// Baseline used when the library is too small for a meaningful median.
-const SMALL_LIBRARY_BASELINE: f32 = 0.35;
+/// Semantic evidence is measured as a z-score against the library's own
+/// similarity distribution for the query, so it is independent of each
+/// embedding model's absolute cosine range. Calibrated against live
+/// nomic-embed-text runs (tests/semantic_live.rs): clear matches sit around
+/// 2 standard deviations above the mean, unrelated Sparks near 0.
+const SEM_Z_ZERO: f32 = 0.5;
+const SEM_Z_FULL: f32 = 2.0;
+/// Floor for the spread so near-identical libraries don't explode z-scores.
+const SEM_MIN_STD: f32 = 0.02;
+/// Below this many vectors the distribution is too thin to trust.
+const SEM_MIN_VECTORS: usize = 5;
+/// Two different Sparks this close together are an ambiguous result: offer
+/// both instead of pretending to know which one the user meant. The z-score
+/// normalisation amplifies small cosine differences (a 0.2 sigma lead is ~0.08
+/// here), so the margin is deliberately generous.
+const AMBIGUITY_MARGIN: f64 = 0.10;
+/// Above this the top result is decisive even if another Spark is close
+/// (e.g. an exact title typed as the goal).
+const DECISIVE_MATCH: f64 = 0.8;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -72,39 +87,48 @@ pub struct Scored {
     usage: i64,
 }
 
-/// Semantic evidence for a query: cosine per Spark plus the library baseline.
+/// Semantic evidence for a query: cosine per Spark plus the distribution the
+/// cosines came from.
 pub struct SemanticScores {
     cosines: HashMap<i64, f32>,
-    baseline: f32,
+    mean: f32,
+    std: f32,
 }
 
 impl SemanticScores {
+    /// Returns `None` when there is not enough indexed material for semantic
+    /// evidence to be meaningful; callers then use standard retrieval.
     pub fn from_index(index: &VectorIndex, query_vector: &[f32]) -> Option<SemanticScores> {
         let sims = index.similarities(query_vector);
-        if sims.is_empty() {
+        if sims.len() < SEM_MIN_VECTORS {
             return None;
         }
-        let mut values: Vec<f32> = sims.iter().map(|(_, c)| *c).collect();
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        // The median Spark is, by definition, not what the user asked for; it
-        // anchors "unrelated" for whichever embedding model is installed.
-        let baseline = if values.len() >= 5 {
-            values[values.len() / 2]
-        } else {
-            SMALL_LIBRARY_BASELINE
-        };
-        Some(SemanticScores { cosines: sims.into_iter().collect(), baseline })
+        let n = sims.len() as f32;
+        let mean = sims.iter().map(|(_, c)| *c).sum::<f32>() / n;
+        let variance = sims.iter().map(|(_, c)| (c - mean).powi(2)).sum::<f32>() / n;
+        Some(SemanticScores {
+            cosines: sims.into_iter().collect(),
+            mean,
+            std: variance.sqrt().max(SEM_MIN_STD),
+        })
     }
 
+    /// 0 for a typical (unrelated) Spark, 1 for a Spark that stands out
+    /// clearly from the rest of the library.
     fn normalized(&self, id: i64) -> Option<f64> {
-        self.cosines
-            .get(&id)
-            .map(|c| (((c - self.baseline) / SEMANTIC_SPAN).clamp(0.0, 1.0)) as f64)
+        self.cosines.get(&id).map(|c| {
+            let z = (c - self.mean) / self.std;
+            ((z - SEM_Z_ZERO) / (SEM_Z_FULL - SEM_Z_ZERO)).clamp(0.0, 1.0) as f64
+        })
     }
 
     fn top_ids(&self, n: usize) -> Vec<i64> {
         let mut all: Vec<(i64, f32)> = self.cosines.iter().map(|(k, v)| (*k, *v)).collect();
-        all.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        all.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
         all.into_iter().take(n).map(|(id, _)| id).collect()
     }
 }
@@ -155,7 +179,8 @@ pub fn lexical_score(terms: &[String], doc: &SearchDoc) -> f64 {
     let title_recall = if title_content.is_empty() {
         0.0
     } else {
-        title_content.iter().filter(|t| any_match(t, terms)).count() as f64 / title_content.len() as f64
+        title_content.iter().filter(|t| any_match(t, terms)).count() as f64
+            / title_content.len() as f64
     };
 
     0.8 * coverage + 0.2 * title_recall
@@ -177,7 +202,12 @@ fn history_bonus(doc: &SearchDoc, now_ms: i64) -> f64 {
 }
 
 /// Scores candidate documents. Pure function: deterministic for equal inputs.
-pub fn rank(query: &str, docs: &[SearchDoc], semantic: Option<&SemanticScores>, now_ms: i64) -> Vec<Scored> {
+pub fn rank(
+    query: &str,
+    docs: &[SearchDoc],
+    semantic: Option<&SemanticScores>,
+    now_ms: i64,
+) -> Vec<Scored> {
     let terms = query_terms(query);
     let query_tokens = tokenize(query);
     let mut scored: Vec<Scored> = docs
@@ -221,7 +251,9 @@ pub fn search(
 ) -> AppResult<SearchOutcome> {
     let query = query.trim();
     if query_terms(query).is_empty() {
-        return Err(AppError::Validation("Describe what you're trying to accomplish.".into()));
+        return Err(AppError::Validation(
+            "Describe what you're trying to accomplish.".into(),
+        ));
     }
 
     let mut ids: Vec<i64> = sparks::fts_candidates(lib, &fts_query(query), FTS_CANDIDATES)?
@@ -254,8 +286,14 @@ pub fn search(
     };
 
     let top = ranked.first();
+    let runner_up = ranked.get(1).map(|s| s.base).unwrap_or(0.0);
     let confidence = match top {
-        Some(s) if s.base >= STRONG_MATCH => Confidence::Strong,
+        Some(s)
+            if s.base >= STRONG_MATCH
+                && (s.base - runner_up >= AMBIGUITY_MARGIN || s.base >= DECISIVE_MATCH) =>
+        {
+            Confidence::Strong
+        }
         Some(s) if s.base >= CANDIDATE_MIN => Confidence::Weak,
         _ => Confidence::None,
     };
@@ -274,7 +312,11 @@ pub fn search(
 
     Ok(SearchOutcome {
         query: query.to_string(),
-        mode: if semantic.is_some() { SearchMode::Semantic } else { SearchMode::Standard },
+        mode: if semantic.is_some() {
+            SearchMode::Semantic
+        } else {
+            SearchMode::Standard
+        },
         confidence,
         best,
         alternatives,
@@ -295,31 +337,56 @@ mod tests {
     }
 
     fn best_title(lib: &Library, q: &str) -> Option<String> {
-        search(lib, q, None, false, 0).unwrap().best.map(|b| b.title)
+        search(lib, q, None, false, 0)
+            .unwrap()
+            .best
+            .map(|b| b.title)
     }
 
     #[test]
     fn intent_queries_find_the_right_spark_without_ai() {
         let lib = seeded();
         let cases = [
-            ("I need AI to help me build an MCP server.", "MCP Server Architect"),
-            ("help me write a youtube video script", "YouTube Script Architect"),
-            ("research a topic deeply with sources", "Deep Research Framework"),
+            (
+                "I need AI to help me build an MCP server.",
+                "MCP Server Architect",
+            ),
+            (
+                "help me write a youtube video script",
+                "YouTube Script Architect",
+            ),
+            (
+                "research a topic deeply with sources",
+                "Deep Research Framework",
+            ),
             ("improve my prompt", "Prompt Engineering Master"),
             ("design a multi-agent system", "AI Agent System Designer"),
-            ("debugging a production failure, find the root cause", "Root Cause Detective"),
-            ("plan the launch of my new project", "Project Launch Planner"),
+            (
+                "debugging a production failure, find the root cause",
+                "Root Cause Detective",
+            ),
+            (
+                "plan the launch of my new project",
+                "Project Launch Planner",
+            ),
             ("codex architecture", "Codex Architecture Expert"),
         ];
         for (query, expected) in cases {
-            assert_eq!(best_title(&lib, query).as_deref(), Some(expected), "query: {query}");
+            assert_eq!(
+                best_title(&lib, query).as_deref(),
+                Some(expected),
+                "query: {query}"
+            );
         }
     }
 
     #[test]
     fn exact_title_wins() {
         let lib = seeded();
-        assert_eq!(best_title(&lib, "root cause detective").as_deref(), Some("Root Cause Detective"));
+        assert_eq!(
+            best_title(&lib, "root cause detective").as_deref(),
+            Some("Root Cause Detective")
+        );
     }
 
     #[test]
@@ -342,7 +409,10 @@ mod tests {
     #[test]
     fn empty_query_is_rejected() {
         let lib = seeded();
-        assert!(matches!(search(&lib, "   ", None, false, 0), Err(AppError::Validation(_))));
+        assert!(matches!(
+            search(&lib, "   ", None, false, 0),
+            Err(AppError::Validation(_))
+        ));
     }
 
     #[test]
@@ -366,7 +436,14 @@ mod tests {
         assert_eq!(out.alternatives[0].title, "Email Drafter");
 
         // A single body-level hit among many terms is not worth offering.
-        let out = search(&lib, "quarterly budget forecast spreadsheet", None, false, 0).unwrap();
+        let out = search(
+            &lib,
+            "quarterly budget forecast spreadsheet",
+            None,
+            false,
+            0,
+        )
+        .unwrap();
         assert_eq!(out.confidence, Confidence::None);
         assert!(out.alternatives.is_empty());
     }
@@ -385,9 +462,20 @@ mod tests {
             )
             .unwrap();
         }
-        let a = search(&lib, "twin spark", None, false, 0).unwrap().best.unwrap().id;
+        let a = search(&lib, "twin spark", None, false, 0)
+            .unwrap()
+            .best
+            .unwrap()
+            .id;
         for _ in 0..5 {
-            assert_eq!(search(&lib, "twin spark", None, false, 0).unwrap().best.unwrap().id, a);
+            assert_eq!(
+                search(&lib, "twin spark", None, false, 0)
+                    .unwrap()
+                    .best
+                    .unwrap()
+                    .id,
+                a
+            );
         }
         assert_eq!(a, 1, "ties break toward the older Spark");
     }

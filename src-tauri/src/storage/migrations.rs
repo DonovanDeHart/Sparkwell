@@ -24,9 +24,8 @@ pub fn apply(conn: &Connection) -> AppResult<()> {
         }
         // Each migration and its version bump commit atomically.
         let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(sql).map_err(|e| {
-            AppError::Database(format!("migration {version} failed: {e}"))
-        })?;
+        tx.execute_batch(sql)
+            .map_err(|e| AppError::Database(format!("migration {version} failed: {e}")))?;
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
         log::info!("library migrated to schema {version}");
@@ -42,11 +41,20 @@ mod tests {
     fn applies_all_migrations_once() {
         let conn = Connection::open_in_memory().unwrap();
         apply(&conn).unwrap();
-        let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(v, LATEST_VERSION);
         // Idempotent.
         apply(&conn).unwrap();
-        for table in ["sparks", "tags", "spark_tags", "embeddings", "settings", "sparks_fts"] {
+        for table in [
+            "sparks",
+            "tags",
+            "spark_tags",
+            "embeddings",
+            "settings",
+            "sparks_fts",
+        ] {
             let n: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
@@ -61,7 +69,8 @@ mod tests {
     #[test]
     fn rejects_future_schema() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "user_version", LATEST_VERSION + 1).unwrap();
+        conn.pragma_update(None, "user_version", LATEST_VERSION + 1)
+            .unwrap();
         assert!(matches!(apply(&conn), Err(AppError::LibraryUnavailable(_))));
     }
 }

@@ -28,8 +28,17 @@ const EMBED_PREFERENCE: &[&str] = &[
 
 /// Preferred small instruction models for metadata drafting, best first.
 const CHAT_PREFERENCE: &[&str] = &[
-    "qwen2.5", "llama3.2", "qwen3", "gemma3", "phi4-mini", "llama3.1", "mistral", "gemma2",
-    "phi3", "qwen2", "llama3",
+    "qwen2.5",
+    "llama3.2",
+    "qwen3",
+    "gemma3",
+    "phi4-mini",
+    "llama3.1",
+    "mistral",
+    "gemma2",
+    "phi3",
+    "qwen2",
+    "llama3",
 ];
 
 /// Model family without registry namespace or tag: `library/qwen2.5:3b` -> `qwen2.5`.
@@ -56,27 +65,37 @@ fn local(models: &[InstalledModel]) -> impl Iterator<Item = &InstalledModel> {
     models.iter().filter(|m| !is_cloud(m))
 }
 
-fn pick(models: &[InstalledModel], preference: &[&str], override_name: Option<&str>, want_embedding: bool) -> Option<String> {
+fn pick(
+    models: &[InstalledModel],
+    preference: &[&str],
+    override_name: Option<&str>,
+    want_embedding: bool,
+) -> Option<String> {
     let candidates: Vec<&InstalledModel> = local(models)
         .filter(|m| is_embedding_model(&m.name) == want_embedding)
         .collect();
     if let Some(wanted) = override_name.map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(m) = candidates
-            .iter()
-            .find(|m| m.name == wanted || family(&m.name) == wanted || m.name == format!("{wanted}:latest"))
-        {
+        if let Some(m) = candidates.iter().find(|m| {
+            m.name == wanted || family(&m.name) == wanted || m.name == format!("{wanted}:latest")
+        }) {
             return Some(m.name.clone());
         }
     }
     for pref in preference {
-        if let Some(m) = candidates.iter().find(|m| family(&m.name).eq_ignore_ascii_case(pref)) {
+        if let Some(m) = candidates
+            .iter()
+            .find(|m| family(&m.name).eq_ignore_ascii_case(pref))
+        {
             return Some(m.name.clone());
         }
     }
     candidates.first().map(|m| m.name.clone())
 }
 
-pub fn pick_embedding_model(models: &[InstalledModel], override_name: Option<&str>) -> Option<String> {
+pub fn pick_embedding_model(
+    models: &[InstalledModel],
+    override_name: Option<&str>,
+) -> Option<String> {
     pick(models, EMBED_PREFERENCE, override_name, true)
 }
 
@@ -106,21 +125,40 @@ mod tests {
     use super::*;
 
     fn m(name: &str) -> InstalledModel {
-        InstalledModel { name: name.into(), remote: false }
+        InstalledModel {
+            name: name.into(),
+            remote: false,
+        }
     }
 
     #[test]
     fn picks_preferred_embedding_model() {
-        let models = vec![m("llama3.2:3b"), m("all-minilm:latest"), m("nomic-embed-text:latest")];
-        assert_eq!(pick_embedding_model(&models, None).as_deref(), Some("nomic-embed-text:latest"));
-        assert_eq!(pick_chat_model(&models, None).as_deref(), Some("llama3.2:3b"));
+        let models = vec![
+            m("llama3.2:3b"),
+            m("all-minilm:latest"),
+            m("nomic-embed-text:latest"),
+        ];
+        assert_eq!(
+            pick_embedding_model(&models, None).as_deref(),
+            Some("nomic-embed-text:latest")
+        );
+        assert_eq!(
+            pick_chat_model(&models, None).as_deref(),
+            Some("llama3.2:3b")
+        );
     }
 
     #[test]
     fn unknown_models_still_usable() {
         let models = vec![m("my-custom-embedder:1"), m("someone/fancy-chat:7b")];
-        assert_eq!(pick_embedding_model(&models, None).as_deref(), Some("my-custom-embedder:1"));
-        assert_eq!(pick_chat_model(&models, None).as_deref(), Some("someone/fancy-chat:7b"));
+        assert_eq!(
+            pick_embedding_model(&models, None).as_deref(),
+            Some("my-custom-embedder:1")
+        );
+        assert_eq!(
+            pick_chat_model(&models, None).as_deref(),
+            Some("someone/fancy-chat:7b")
+        );
     }
 
     #[test]
@@ -133,7 +171,10 @@ mod tests {
     fn cloud_models_are_never_selected() {
         let models = vec![
             m("gpt-oss:120b-cloud"),
-            InstalledModel { name: "qwen3-coder:480b".into(), remote: true },
+            InstalledModel {
+                name: "qwen3-coder:480b".into(),
+                remote: true,
+            },
             m("deepseek-v3.1:cloud"),
         ];
         assert_eq!(pick_chat_model(&models, None), None);

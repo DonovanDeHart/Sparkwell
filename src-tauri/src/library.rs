@@ -41,7 +41,11 @@ pub enum SwitchMode {
 /// custom location must already contain a library (a missing drive must never
 /// silently produce an empty library somewhere else).
 pub fn open_slot(dir: &Path, create_if_missing: bool) -> LibrarySlot {
-    let mode = if create_if_missing { OpenMode::CreateIfMissing } else { OpenMode::ExistingOnly };
+    let mode = if create_if_missing {
+        OpenMode::CreateIfMissing
+    } else {
+        OpenMode::ExistingOnly
+    };
     match Library::open(dir, mode) {
         Ok(mut lib) => {
             if lib.created {
@@ -49,11 +53,19 @@ pub fn open_slot(dir: &Path, create_if_missing: bool) -> LibrarySlot {
                     log::warn!("could not add starter Sparks: {e}");
                 }
             }
-            LibrarySlot { dir: dir.to_path_buf(), db: Some(lib), error: None }
+            LibrarySlot {
+                dir: dir.to_path_buf(),
+                db: Some(lib),
+                error: None,
+            }
         }
         Err(e) => {
             log::error!("library unavailable at {}: {e}", dir.display());
-            LibrarySlot { dir: dir.to_path_buf(), db: None, error: Some(e.to_string()) }
+            LibrarySlot {
+                dir: dir.to_path_buf(),
+                db: None,
+                error: Some(e.to_string()),
+            }
         }
     }
 }
@@ -67,7 +79,11 @@ pub fn info(state: &AppState) -> LibraryInfo {
         is_default,
         available: slot.db.is_some(),
         error: slot.error.clone(),
-        spark_count: slot.db.as_ref().and_then(|l| l.spark_count().ok()).unwrap_or(0),
+        spark_count: slot
+            .db
+            .as_ref()
+            .and_then(|l| l.spark_count().ok())
+            .unwrap_or(0),
     }
 }
 
@@ -97,12 +113,28 @@ fn install<R: Runtime>(app: &AppHandle<R>, slot: LibrarySlot) {
 
 /// Switches to `target` using `mode`. The previous library file is never
 /// modified or deleted; on any failure the previous library stays active.
-pub fn switch<R: Runtime>(app: &AppHandle<R>, target: &Path, mode: SwitchMode) -> AppResult<LibraryInfo> {
+pub fn switch<R: Runtime>(
+    app: &AppHandle<R>,
+    target: &Path,
+    mode: SwitchMode,
+) -> AppResult<LibraryInfo> {
     let state = app.state::<AppState>();
-    let current_dir = state.library.lock().map(|s| s.dir.clone()).map_err(|_| AppError::Internal("library lock poisoned".into()))?;
+    let current_dir = state
+        .library
+        .lock()
+        .map(|s| s.dir.clone())
+        .map_err(|_| AppError::Internal("library lock poisoned".into()))?;
     let target_info = relocate::inspect_target(target, &current_dir)?;
-    if target_info.is_current && state.library.lock().map(|s| s.db.is_some()).unwrap_or(false) {
-        return Err(AppError::Validation("That folder is already your library location.".into()));
+    if target_info.is_current
+        && state
+            .library
+            .lock()
+            .map(|s| s.db.is_some())
+            .unwrap_or(false)
+    {
+        return Err(AppError::Validation(
+            "That folder is already your library location.".into(),
+        ));
     }
     let target_dir = target_info.path.clone();
 
@@ -114,19 +146,24 @@ pub fn switch<R: Runtime>(app: &AppHandle<R>, target: &Path, mode: SwitchMode) -
                     "That folder already has a Sparkwell library. Choose \"Use that library\" or pick an empty folder.".into(),
                 ));
             }
-            let copied = state.with_library(|current| relocate::copy_library_to(current, &target_dir))?;
+            let copied =
+                state.with_library(|current| relocate::copy_library_to(current, &target_dir))?;
             created_copy = Some(copied);
             Library::open(&target_dir, OpenMode::ExistingOnly)
         }
         SwitchMode::Open => {
             if !target_info.has_existing_library {
-                return Err(AppError::Validation("No Sparkwell library was found in that folder.".into()));
+                return Err(AppError::Validation(
+                    "No Sparkwell library was found in that folder.".into(),
+                ));
             }
             Library::open(&target_dir, OpenMode::ExistingOnly)
         }
         SwitchMode::Create => {
             if target_info.has_existing_library {
-                return Err(AppError::Validation("That folder already has a Sparkwell library.".into()));
+                return Err(AppError::Validation(
+                    "That folder already has a Sparkwell library.".into(),
+                ));
             }
             relocate::ensure_writable(&target_dir)?;
             Library::open(&target_dir, OpenMode::CreateIfMissing).and_then(|mut lib| {
@@ -152,7 +189,11 @@ pub fn switch<R: Runtime>(app: &AppHandle<R>, target: &Path, mode: SwitchMode) -
     // Persist the new location before switching, so disk and memory agree.
     let is_default = paths_equal(&target_dir, &state.default_library_dir);
     if let Err(e) = state.update_config(|c| {
-        c.library_dir = if is_default { None } else { Some(target_dir.clone()) };
+        c.library_dir = if is_default {
+            None
+        } else {
+            Some(target_dir.clone())
+        };
     }) {
         drop(new_lib);
         if let Some(copy) = created_copy {
@@ -161,7 +202,14 @@ pub fn switch<R: Runtime>(app: &AppHandle<R>, target: &Path, mode: SwitchMode) -
         return Err(e);
     }
 
-    install(app, LibrarySlot { dir: target_dir, db: Some(new_lib), error: None });
+    install(
+        app,
+        LibrarySlot {
+            dir: target_dir,
+            db: Some(new_lib),
+            error: None,
+        },
+    );
     Ok(info(&state))
 }
 
@@ -181,7 +229,11 @@ pub fn use_default<R: Runtime>(app: &AppHandle<R>) -> AppResult<LibraryInfo> {
 /// Retries opening the configured library (e.g. after reconnecting a drive).
 pub fn retry<R: Runtime>(app: &AppHandle<R>) -> AppResult<LibraryInfo> {
     let state = app.state::<AppState>();
-    let dir = state.library.lock().map(|s| s.dir.clone()).map_err(|_| AppError::Internal("library lock poisoned".into()))?;
+    let dir = state
+        .library
+        .lock()
+        .map(|s| s.dir.clone())
+        .map_err(|_| AppError::Internal("library lock poisoned".into()))?;
     let is_default = paths_equal(&dir, &state.default_library_dir);
     let slot = open_slot(&dir, is_default);
     let failed = slot.error.clone();

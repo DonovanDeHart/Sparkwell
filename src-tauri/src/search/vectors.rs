@@ -19,7 +19,11 @@ pub struct VectorIndex {
 
 impl VectorIndex {
     pub fn empty(model: Option<String>) -> Self {
-        Self { model, dims: 0, vectors: HashMap::new() }
+        Self {
+            model,
+            dims: 0,
+            vectors: HashMap::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -67,7 +71,11 @@ impl VectorIndex {
             .conn
             .prepare("SELECT spark_id, dimensions, vector FROM embeddings WHERE model = ?1")?;
         let rows = stmt.query_map(params![model], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+            ))
         })?;
         for row in rows {
             let (id, dims, blob) = row?;

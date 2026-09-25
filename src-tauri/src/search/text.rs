@@ -6,16 +6,120 @@
 
 /// Conversational filler that carries no retrieval signal in a goal statement.
 const STOPWORDS: &[&str] = &[
-    "a", "able", "about", "accomplish", "ai", "also", "am", "an", "and", "any", "anything", "are",
-    "as", "assist", "at", "be", "been", "being", "but", "by", "can", "chatgpt", "claude", "could",
-    "d", "did", "do", "does", "doing", "done", "for", "from", "gemini", "get", "got", "help",
-    "helping", "helps", "how", "i", "if", "im", "in", "into", "is", "it", "its", "just", "like",
-    "ll", "llm", "m", "make", "making", "may", "me", "might", "mine", "must", "my", "need",
-    "needed", "needs", "of", "on", "or", "our", "please", "re", "really", "s", "shall", "should",
-    "so", "some", "something", "spark", "sparks", "t", "than", "that", "the", "then", "these",
-    "thing", "things", "this", "those", "to", "try", "trying", "us", "use", "using", "ve", "very",
-    "want", "wanted", "wants", "was", "way", "we", "were", "what", "when", "where", "which", "who",
-    "why", "will", "with", "would", "you", "your",
+    "a",
+    "able",
+    "about",
+    "accomplish",
+    "ai",
+    "also",
+    "am",
+    "an",
+    "and",
+    "any",
+    "anything",
+    "are",
+    "as",
+    "assist",
+    "at",
+    "be",
+    "been",
+    "being",
+    "but",
+    "by",
+    "can",
+    "chatgpt",
+    "claude",
+    "could",
+    "d",
+    "did",
+    "do",
+    "does",
+    "doing",
+    "done",
+    "for",
+    "from",
+    "gemini",
+    "get",
+    "got",
+    "help",
+    "helping",
+    "helps",
+    "how",
+    "i",
+    "if",
+    "im",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "just",
+    "like",
+    "ll",
+    "llm",
+    "m",
+    "make",
+    "making",
+    "may",
+    "me",
+    "might",
+    "mine",
+    "must",
+    "my",
+    "need",
+    "needed",
+    "needs",
+    "of",
+    "on",
+    "or",
+    "our",
+    "please",
+    "re",
+    "really",
+    "s",
+    "shall",
+    "should",
+    "so",
+    "some",
+    "something",
+    "spark",
+    "sparks",
+    "t",
+    "than",
+    "that",
+    "the",
+    "then",
+    "these",
+    "thing",
+    "things",
+    "this",
+    "those",
+    "to",
+    "try",
+    "trying",
+    "us",
+    "use",
+    "using",
+    "ve",
+    "very",
+    "want",
+    "wanted",
+    "wants",
+    "was",
+    "way",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "with",
+    "would",
+    "you",
+    "your",
 ];
 
 fn fold_char(c: char) -> char {
@@ -99,7 +203,11 @@ pub fn query_terms(query: &str) -> Vec<String> {
         .map(|t| stem(t))
         .collect();
     if picked.is_empty() {
-        picked = raw.iter().filter(|t| t.chars().count() > 1).map(|t| stem(t)).collect();
+        picked = raw
+            .iter()
+            .filter(|t| t.chars().count() > 1)
+            .map(|t| stem(t))
+            .collect();
     }
     let mut out: Vec<String> = Vec::new();
     for t in picked {
@@ -147,7 +255,10 @@ mod tests {
 
     #[test]
     fn intent_phrasing_is_stripped() {
-        assert_eq!(query_terms("I need AI to help me build an MCP server."), vec!["build", "mcp", "serv"]);
+        assert_eq!(
+            query_terms("I need AI to help me build an MCP server."),
+            vec!["build", "mcp", "serv"]
+        );
         assert_eq!(
             query_terms("Help me write a YouTube video script"),
             vec!["write", "youtube", "video", "script"]
@@ -179,14 +290,23 @@ mod tests {
 
     #[test]
     fn tokenizer_folds_case_accents_and_punctuation() {
-        assert_eq!(tokenize("Résumé, C++ & Node.js!"), vec!["resume", "c", "node", "js"]);
+        assert_eq!(
+            tokenize("Résumé, C++ & Node.js!"),
+            vec!["resume", "c", "node", "js"]
+        );
         assert_eq!(tokenize("日本語 test"), vec!["日本語", "test"]);
     }
 
     #[test]
     fn fts_query_is_safe_and_prefixed() {
-        assert_eq!(fts_query("build an MCP server"), "\"build\"* OR \"mcp\"* OR \"server\"*");
-        assert_eq!(fts_query("\"quote\" OR NEAR(x)"), "\"quote\"* OR \"near\"* OR \"x\"");
+        assert_eq!(
+            fts_query("build an MCP server"),
+            "\"build\"* OR \"mcp\"* OR \"server\"*"
+        );
+        assert_eq!(
+            fts_query("\"quote\" OR NEAR(x)"),
+            "\"quote\"* OR \"near\"* OR \"x\""
+        );
         assert_eq!(fts_query(""), "");
     }
 }

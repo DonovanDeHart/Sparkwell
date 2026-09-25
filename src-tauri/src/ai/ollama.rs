@@ -90,7 +90,10 @@ impl OllamaClient {
             .connect_timeout(Duration::from_millis(800))
             .build()
             .expect("HTTP client configuration is static and valid");
-        Self { http, base: base.trim_end_matches('/').to_string() }
+        Self {
+            http,
+            base: base.trim_end_matches('/').to_string(),
+        }
     }
 
     async fn check(resp: reqwest::Response) -> Result<reqwest::Response, OllamaError> {
@@ -102,7 +105,10 @@ impl OllamaClient {
         if status.as_u16() == 404 || text.contains("not found") {
             Err(OllamaError::ModelMissing)
         } else {
-            Err(OllamaError::BadResponse(format!("HTTP {status}: {}", text.chars().take(200).collect::<String>())))
+            Err(OllamaError::BadResponse(format!(
+                "HTTP {status}: {}",
+                text.chars().take(200).collect::<String>()
+            )))
         }
     }
 
@@ -131,7 +137,12 @@ impl OllamaClient {
     }
 
     /// Embeds a batch of inputs via `/api/embed`.
-    pub async fn embed(&self, model: &str, inputs: &[String], timeout: Duration) -> Result<Vec<Vec<f32>>, OllamaError> {
+    pub async fn embed(
+        &self,
+        model: &str,
+        inputs: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<Vec<f32>>, OllamaError> {
         let resp = self
             .http
             .post(format!("{}/api/embed", self.base))
@@ -202,7 +213,10 @@ mod tests {
         let client = OllamaClient::new("http://127.0.0.1:9");
         let started = std::time::Instant::now();
         let err = client.list_models().await.unwrap_err();
-        assert!(matches!(err, OllamaError::Unreachable | OllamaError::Timeout));
+        assert!(matches!(
+            err,
+            OllamaError::Unreachable | OllamaError::Timeout
+        ));
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 }

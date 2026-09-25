@@ -47,12 +47,19 @@ fn launch_at_startup_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
 }
 
 #[tauri::command]
-pub async fn get_app_snapshot<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> AppResult<AppSnapshot> {
+pub async fn get_app_snapshot<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> AppResult<AppSnapshot> {
     Ok(AppSnapshot {
         version: app.package_info().version.to_string(),
         platform: std::env::consts::OS,
         pinned: state.is_pinned(),
-        hotkey: state.hotkey.lock().map(|h| h.clone()).map_err(|_| AppError::Internal("hotkey lock".into()))?,
+        hotkey: state
+            .hotkey
+            .lock()
+            .map(|h| h.clone())
+            .map_err(|_| AppError::Internal("hotkey lock".into()))?,
         launch_at_startup: launch_at_startup_enabled(&app),
         library: library::info(&state),
         ai: state.ai_status(),
@@ -72,34 +79,55 @@ pub async fn get_spark(state: State<'_, AppState>, id: i64) -> AppResult<SparkDe
 }
 
 #[tauri::command]
-pub async fn create_spark<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>, input: SparkInput) -> AppResult<SparkSummary> {
+pub async fn create_spark<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    input: SparkInput,
+) -> AppResult<SparkSummary> {
     let spark = state.with_library(|lib| sparks::create(lib, input))?;
     ai::on_spark_changed(&app, spark.id);
     Ok(spark)
 }
 
 #[tauri::command]
-pub async fn update_spark<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>, id: i64, input: SparkInput) -> AppResult<SparkSummary> {
+pub async fn update_spark<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    id: i64,
+    input: SparkInput,
+) -> AppResult<SparkSummary> {
     let spark = state.with_library(|lib| sparks::update(lib, id, input))?;
     ai::on_spark_changed(&app, spark.id);
     Ok(spark)
 }
 
 #[tauri::command]
-pub async fn delete_spark<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>, id: i64) -> AppResult<()> {
+pub async fn delete_spark<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    id: i64,
+) -> AppResult<()> {
     state.with_library(|lib| sparks::delete(lib, id))?;
     ai::on_spark_changed(&app, id);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_favorite(state: State<'_, AppState>, id: i64, favorite: bool) -> AppResult<SparkSummary> {
+pub async fn set_favorite(
+    state: State<'_, AppState>,
+    id: i64,
+    favorite: bool,
+) -> AppResult<SparkSummary> {
     state.with_library(|lib| sparks::set_favorite(lib, id, favorite))
 }
 
 /// Copies the complete stored body (never the summary) to the clipboard.
 #[tauri::command]
-pub async fn copy_spark<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>, id: i64) -> AppResult<CopyResult> {
+pub async fn copy_spark<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    id: i64,
+) -> AppResult<CopyResult> {
     let (title, body) = state.with_library(|lib| sparks::body(lib, id))?;
     app.clipboard()
         .write_text(body.clone())
@@ -108,16 +136,27 @@ pub async fn copy_spark<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState
     if let Err(e) = state.with_library(|lib| sparks::record_copy(lib, id)) {
         log::warn!("copied but couldn't record usage: {e}");
     }
-    Ok(CopyResult { id, title, characters: body.chars().count() })
+    Ok(CopyResult {
+        id,
+        title,
+        characters: body.chars().count(),
+    })
 }
 
 #[tauri::command]
-pub async fn search_sparks<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>, query: String) -> AppResult<search::SearchOutcome> {
+pub async fn search_sparks<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    query: String,
+) -> AppResult<search::SearchOutcome> {
     let query = query.trim().to_string();
     let query_vector = ai::embed_query(&app, &query).await;
     let (scores, indexed) = match &query_vector {
         Some(qv) => {
-            let index = state.vectors.read().map_err(|_| AppError::Internal("vector lock".into()))?;
+            let index = state
+                .vectors
+                .read()
+                .map_err(|_| AppError::Internal("vector lock".into()))?;
             (SemanticScores::from_index(&index, qv), index.len())
         }
         None => (None, 0),
@@ -129,7 +168,10 @@ pub async fn search_sparks<R: Runtime>(app: AppHandle<R>, state: State<'_, AppSt
 }
 
 #[tauri::command]
-pub async fn suggest_metadata<R: Runtime>(app: AppHandle<R>, body: String) -> AppResult<MetadataSuggestion> {
+pub async fn suggest_metadata<R: Runtime>(
+    app: AppHandle<R>,
+    body: String,
+) -> AppResult<MetadataSuggestion> {
     ai::suggest_metadata(&app, &body).await
 }
 
@@ -160,7 +202,10 @@ pub async fn quit_app<R: Runtime>(app: AppHandle<R>) -> AppResult<()> {
 // ---------------------------------------------------------------- Hotkey ---
 
 #[tauri::command]
-pub async fn set_hotkey<R: Runtime>(app: AppHandle<R>, accelerator: String) -> AppResult<HotkeyStatus> {
+pub async fn set_hotkey<R: Runtime>(
+    app: AppHandle<R>,
+    accelerator: String,
+) -> AppResult<HotkeyStatus> {
     hotkey::change(&app, &accelerator)
 }
 
@@ -177,11 +222,20 @@ pub async fn end_hotkey_capture<R: Runtime>(app: AppHandle<R>) -> AppResult<Hotk
 // -------------------------------------------------------------- Settings ---
 
 #[tauri::command]
-pub async fn set_launch_at_startup<R: Runtime>(app: AppHandle<R>, enabled: bool) -> AppResult<bool> {
+pub async fn set_launch_at_startup<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> AppResult<bool> {
     let manager = app.autolaunch();
-    let result = if enabled { manager.enable() } else { manager.disable() };
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
     if let Err(e) = result {
-        return Err(AppError::Io(format!("Couldn't update the startup setting: {e}")));
+        return Err(AppError::Io(format!(
+            "Couldn't update the startup setting: {e}"
+        )));
     }
     // Report the actual registered state, not the requested one.
     Ok(launch_at_startup_enabled(&app))
@@ -189,11 +243,21 @@ pub async fn set_launch_at_startup<R: Runtime>(app: AppHandle<R>, enabled: bool)
 
 /// Opens the native folder picker and describes the chosen folder.
 #[tauri::command]
-pub async fn choose_library_folder<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> AppResult<Option<TargetInfo>> {
-    let current = state.library.lock().map(|s| s.dir.clone()).map_err(|_| AppError::Internal("library lock".into()))?;
+pub async fn choose_library_folder<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> AppResult<Option<TargetInfo>> {
+    let current = state
+        .library
+        .lock()
+        .map(|s| s.dir.clone())
+        .map_err(|_| AppError::Internal("library lock".into()))?;
     let picked = {
         let _guard = window::AutohideSuppressed::new(&state);
-        let mut dialog = app.dialog().file().set_title("Choose a folder for your Spark library");
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_title("Choose a folder for your Spark library");
         if current.exists() {
             dialog = dialog.set_directory(&current);
         }
@@ -205,7 +269,9 @@ pub async fn choose_library_folder<R: Runtime>(app: AppHandle<R>, state: State<'
     if let Some(w) = window::main_window(&app) {
         let _ = w.set_focus();
     }
-    let Some(picked) = picked else { return Ok(None) };
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
     let path: PathBuf = picked
         .into_path()
         .map_err(|_| AppError::Validation("That location isn't a local folder.".into()))?;
@@ -213,7 +279,11 @@ pub async fn choose_library_folder<R: Runtime>(app: AppHandle<R>, state: State<'
 }
 
 #[tauri::command]
-pub async fn change_library_location<R: Runtime>(app: AppHandle<R>, path: PathBuf, mode: SwitchMode) -> AppResult<LibraryInfo> {
+pub async fn change_library_location<R: Runtime>(
+    app: AppHandle<R>,
+    path: PathBuf,
+    mode: SwitchMode,
+) -> AppResult<LibraryInfo> {
     library::switch(&app, &path, mode)
 }
 

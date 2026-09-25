@@ -53,7 +53,10 @@ pub fn messages(body: &str) -> Value {
 
 fn clip(s: &str, max: usize) -> String {
     let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    let s = s.trim_matches(|c| c == '"' || c == '\'' || c == '*').trim().to_string();
+    let s = s
+        .trim_matches(|c| c == '"' || c == '\'' || c == '*')
+        .trim()
+        .to_string();
     if s.chars().count() <= max {
         return s;
     }
@@ -73,18 +76,29 @@ pub fn parse(content: &str) -> Option<MetadataSuggestion> {
     }
     let raw: Value = serde_json::from_str(&content[start..=end]).ok()?;
     let title = clip(raw.get("title")?.as_str()?, MAX_TITLE);
-    let summary = clip(raw.get("summary").and_then(Value::as_str).unwrap_or(""), MAX_SUMMARY);
+    let summary = clip(
+        raw.get("summary").and_then(Value::as_str).unwrap_or(""),
+        MAX_SUMMARY,
+    );
     let tags_raw: Vec<String> = raw
         .get("tags")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.chars().take(24).collect())).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str().map(|s| s.chars().take(24).collect()))
+                .collect()
+        })
         .unwrap_or_default();
     let mut tags = normalize_tags(&tags_raw);
     tags.truncate(MAX_TAGS);
     if title.is_empty() {
         return None;
     }
-    Some(MetadataSuggestion { title, summary, tags })
+    Some(MetadataSuggestion {
+        title,
+        summary,
+        tags,
+    })
 }
 
 #[cfg(test)]
@@ -108,7 +122,10 @@ mod tests {
     #[test]
     fn clips_overlong_fields() {
         let long = "word ".repeat(100);
-        let s = parse(&format!(r#"{{"title":"{long}","summary":"{long}","tags":[]}}"#)).unwrap();
+        let s = parse(&format!(
+            r#"{{"title":"{long}","summary":"{long}","tags":[]}}"#
+        ))
+        .unwrap();
         assert!(s.title.chars().count() <= MAX_TITLE + 1);
         assert!(s.summary.chars().count() <= MAX_SUMMARY + 1);
     }

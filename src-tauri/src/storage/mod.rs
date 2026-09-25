@@ -59,12 +59,19 @@ impl Library {
         }
 
         let conn = open_connection(&path).map_err(|e| {
-            AppError::LibraryUnavailable(format!("Couldn't open the library at {}: {e}", path.display()))
+            AppError::LibraryUnavailable(format!(
+                "Couldn't open the library at {}: {e}",
+                path.display()
+            ))
         })?;
         verify_identity(&conn, existed)?;
         migrations::apply(&conn)?;
 
-        Ok(Library { conn, path, created: !existed })
+        Ok(Library {
+            conn,
+            path,
+            created: !existed,
+        })
     }
 
     /// Opens an in-memory library (tests).
@@ -74,18 +81,26 @@ impl Library {
         configure(&conn).unwrap();
         verify_identity(&conn, false).unwrap();
         migrations::apply(&conn).unwrap();
-        Library { conn, path: PathBuf::from(":memory:"), created: true }
+        Library {
+            conn,
+            path: PathBuf::from(":memory:"),
+            created: true,
+        }
     }
 
     pub fn spark_count(&self) -> AppResult<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM sparks", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM sparks", [], |r| r.get(0))?)
     }
 
     pub fn setting(&self, key: &str) -> AppResult<Option<String>> {
         use rusqlite::OptionalExtension;
         Ok(self
             .conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
             .optional()?)
     }
 
@@ -148,7 +163,9 @@ pub fn integrity_check(conn: &Connection) -> AppResult<()> {
     if result == "ok" {
         Ok(())
     } else {
-        Err(AppError::Database(format!("integrity check failed: {result}")))
+        Err(AppError::Database(format!(
+            "integrity check failed: {result}"
+        )))
     }
 }
 
@@ -197,7 +214,9 @@ mod tests {
     #[test]
     fn existing_only_fails_when_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let err = Library::open(dir.path(), OpenMode::ExistingOnly).err().unwrap();
+        let err = Library::open(dir.path(), OpenMode::ExistingOnly)
+            .err()
+            .unwrap();
         assert!(matches!(err, AppError::LibraryUnavailable(_)));
     }
 
@@ -206,16 +225,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = library_file(dir.path());
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("CREATE TABLE something_else (x INTEGER);").unwrap();
+        conn.execute_batch("CREATE TABLE something_else (x INTEGER);")
+            .unwrap();
         drop(conn);
-        let err = Library::open(dir.path(), OpenMode::ExistingOnly).err().unwrap();
+        let err = Library::open(dir.path(), OpenMode::ExistingOnly)
+            .err()
+            .unwrap();
         assert!(matches!(err, AppError::LibraryUnavailable(_)));
     }
 
     #[test]
     fn refuses_garbage_file() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(library_file(dir.path()), b"this is not sqlite at all, not even close......").unwrap();
+        std::fs::write(
+            library_file(dir.path()),
+            b"this is not sqlite at all, not even close......",
+        )
+        .unwrap();
         assert!(Library::open(dir.path(), OpenMode::ExistingOnly).is_err());
     }
 

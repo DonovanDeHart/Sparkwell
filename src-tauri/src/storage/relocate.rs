@@ -32,7 +32,9 @@ pub struct TargetInfo {
 /// Validates a user-chosen folder and describes what is already there.
 pub fn inspect_target(target: &Path, current_dir: &Path) -> AppResult<TargetInfo> {
     if !target.is_absolute() {
-        return Err(AppError::Validation("Choose an absolute folder path.".into()));
+        return Err(AppError::Validation(
+            "Choose an absolute folder path.".into(),
+        ));
     }
     if !target.exists() {
         return Err(AppError::Validation("That folder doesn't exist.".into()));
@@ -63,9 +65,8 @@ pub fn inspect_target(target: &Path, current_dir: &Path) -> AppResult<TargetInfo
 /// Confirms we can create files in the folder before attempting a migration.
 pub fn ensure_writable(dir: &Path) -> AppResult<()> {
     let probe = dir.join(".sparkwell-write-test");
-    fs::write(&probe, b"ok").map_err(|e| {
-        AppError::Validation(format!("Sparkwell can't write to that folder: {e}"))
-    })?;
+    fs::write(&probe, b"ok")
+        .map_err(|e| AppError::Validation(format!("Sparkwell can't write to that folder: {e}")))?;
     let _ = fs::remove_file(&probe);
     Ok(())
 }
@@ -120,7 +121,9 @@ fn read_spark_count(file: &Path) -> AppResult<i64> {
     let conn = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let app_id: i32 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     if app_id != APPLICATION_ID {
-        return Err(AppError::LibraryUnavailable("not a Sparkwell library".into()));
+        return Err(AppError::LibraryUnavailable(
+            "not a Sparkwell library".into(),
+        ));
     }
     Ok(conn.query_row("SELECT COUNT(*) FROM sparks", [], |r| r.get(0))?)
 }
@@ -179,7 +182,11 @@ mod tests {
         // Full-text index travels with the copy.
         let hits: i64 = reopened
             .conn
-            .query_row("SELECT COUNT(*) FROM sparks_fts WHERE sparks_fts MATCH 'spark'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sparks_fts WHERE sparks_fts MATCH 'spark'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(hits, 3);
         assert!(!dst.join("sparkwell.db.migrating").exists());
@@ -193,7 +200,11 @@ mod tests {
         let err = copy_library_to(&a, &root.path().join("b")).err().unwrap();
         assert!(matches!(err, AppError::Validation(_)));
         let b = Library::open(&root.path().join("b"), OpenMode::ExistingOnly).unwrap();
-        assert_eq!(b.spark_count().unwrap(), 2, "existing library must be untouched");
+        assert_eq!(
+            b.spark_count().unwrap(),
+            2,
+            "existing library must be untouched"
+        );
     }
 
     #[test]
@@ -235,8 +246,17 @@ mod tests {
 
     #[test]
     fn strips_verbatim_prefixes() {
-        assert_eq!(strip_verbatim(Path::new(r"\\?\C:\Users\me")), PathBuf::from(r"C:\Users\me"));
-        assert_eq!(strip_verbatim(Path::new(r"\\?\UNC\server\share")), PathBuf::from(r"\\server\share"));
-        assert_eq!(strip_verbatim(Path::new("/home/me")), PathBuf::from("/home/me"));
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\Users\me")),
+            PathBuf::from(r"C:\Users\me")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\server\share")),
+            PathBuf::from(r"\\server\share")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new("/home/me")),
+            PathBuf::from("/home/me")
+        );
     }
 }

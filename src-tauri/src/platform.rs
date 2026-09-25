@@ -88,8 +88,18 @@ pub fn target_work_area<R: Runtime>(window: &WebviewWindow<R>) -> Option<WorkAre
         }
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            rcMonitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
-            rcWork: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+            rcMonitor: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            rcWork: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
             dwFlags: 0,
         };
         if GetMonitorInfoW(monitor, &mut info) == 0 {
@@ -137,15 +147,35 @@ mod tests {
 
     #[test]
     fn docks_to_right_edge_at_100_percent() {
-        let r = dock_rect(&WorkArea { x: 0, y: 0, width: 1920, height: 1040, scale: 1.0 });
-        assert_eq!(r, DockRect { x: 1920 - 436, y: 0, width: 436, height: 1040 });
+        let r = dock_rect(&WorkArea {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1040,
+            scale: 1.0,
+        });
+        assert_eq!(
+            r,
+            DockRect {
+                x: 1920 - 436,
+                y: 0,
+                width: 436,
+                height: 1040
+            }
+        );
     }
 
     #[test]
     fn scales_with_dpi() {
         for scale in [1.25, 1.5, 2.0] {
             let width = (2560.0 * scale) as u32;
-            let r = dock_rect(&WorkArea { x: 0, y: 0, width, height: 1400, scale });
+            let r = dock_rect(&WorkArea {
+                x: 0,
+                y: 0,
+                width,
+                height: 1400,
+                scale,
+            });
             assert_eq!(r.width, (436.0 * scale).round() as u32, "scale {scale}");
             assert_eq!(r.x + r.width as i32, width as i32);
         }
@@ -154,14 +184,26 @@ mod tests {
     #[test]
     fn small_logical_screens_use_minimum_width() {
         // 1920x1080 at 200% = 960 logical px wide.
-        let r = dock_rect(&WorkArea { x: 0, y: 0, width: 1920, height: 1032, scale: 2.0 });
+        let r = dock_rect(&WorkArea {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1032,
+            scale: 2.0,
+        });
         assert_eq!(r.width, (MIN_WIDTH * 2.0) as u32);
     }
 
     #[test]
     fn secondary_monitor_offsets_and_taskbar_are_respected() {
         // Secondary monitor to the left of primary, taskbar at the top (y=40).
-        let r = dock_rect(&WorkArea { x: -2560, y: 40, width: 2560, height: 1400, scale: 1.0 });
+        let r = dock_rect(&WorkArea {
+            x: -2560,
+            y: 40,
+            width: 2560,
+            height: 1400,
+            scale: 1.0,
+        });
         assert_eq!(r.x, -436);
         assert_eq!(r.y, 40);
         assert_eq!(r.height, 1400);
@@ -169,7 +211,13 @@ mod tests {
 
     #[test]
     fn never_wider_than_the_work_area() {
-        let r = dock_rect(&WorkArea { x: 0, y: 0, width: 300, height: 600, scale: 1.0 });
+        let r = dock_rect(&WorkArea {
+            x: 0,
+            y: 0,
+            width: 300,
+            height: 600,
+            scale: 1.0,
+        });
         assert_eq!(r.width, 300);
         assert_eq!(r.x, 0);
     }

@@ -28,7 +28,9 @@ pub fn main_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
 
 /// Snaps the window to the right edge of the target monitor's work area.
 pub fn dock<R: Runtime>(window: &WebviewWindow<R>) {
-    let Some(area) = target_work_area(window) else { return };
+    let Some(area) = target_work_area(window) else {
+        return;
+    };
     let rect = dock_rect(&area);
     let size = PhysicalSize::new(rect.width, rect.height);
     let pos = PhysicalPosition::new(rect.x, rect.y);
@@ -41,7 +43,9 @@ pub fn dock<R: Runtime>(window: &WebviewWindow<R>) {
 }
 
 pub fn show<R: Runtime>(app: &AppHandle<R>) {
-    let Some(window) = main_window(app) else { return };
+    let Some(window) = main_window(app) else {
+        return;
+    };
     let state = app.state::<AppState>();
     let was_visible = window.is_visible().unwrap_or(false);
     if !was_visible {
@@ -59,7 +63,9 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
 }
 
 pub fn hide<R: Runtime>(app: &AppHandle<R>) {
-    let Some(window) = main_window(app) else { return };
+    let Some(window) = main_window(app) else {
+        return;
+    };
     let _ = window.hide();
     // Never leave the activation shortcut unregistered.
     let _ = crate::hotkey::resume(app);
@@ -69,7 +75,9 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) {
 /// Hotkey/tray behaviour: hidden -> show; visible but unfocused -> focus;
 /// visible and focused -> hide.
 pub fn toggle<R: Runtime>(app: &AppHandle<R>) {
-    let Some(window) = main_window(app) else { return };
+    let Some(window) = main_window(app) else {
+        return;
+    };
     let visible = window.is_visible().unwrap_or(false);
     let focused = window.is_focused().unwrap_or(false);
     if visible && focused {
@@ -93,7 +101,9 @@ pub fn toggle_from_tray<R: Runtime>(app: &AppHandle<R>) {
     if recently_autohidden {
         return;
     }
-    let Some(window) = main_window(app) else { return };
+    let Some(window) = main_window(app) else {
+        return;
+    };
     if window.is_visible().unwrap_or(false) {
         hide(app);
     } else {
@@ -129,7 +139,9 @@ pub fn on_focus_lost<R: Runtime>(app: &AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(BLUR_DELAY).await;
         let state = app.state::<AppState>();
-        let Some(window) = main_window(&app) else { return };
+        let Some(window) = main_window(&app) else {
+            return;
+        };
         let still_blurred = !window.is_focused().unwrap_or(true);
         let visible = window.is_visible().unwrap_or(false);
         if still_blurred
@@ -150,14 +162,20 @@ pub struct AutohideSuppressed<'a>(&'a AppState);
 
 impl<'a> AutohideSuppressed<'a> {
     pub fn new(state: &'a AppState) -> Self {
-        state.window.suppress_autohide.fetch_add(1, Ordering::SeqCst);
+        state
+            .window
+            .suppress_autohide
+            .fetch_add(1, Ordering::SeqCst);
         Self(state)
     }
 }
 
 impl Drop for AutohideSuppressed<'_> {
     fn drop(&mut self) {
-        self.0.window.suppress_autohide.fetch_sub(1, Ordering::SeqCst);
+        self.0
+            .window
+            .suppress_autohide
+            .fetch_sub(1, Ordering::SeqCst);
         if let Ok(mut t) = self.0.window.last_shown.lock() {
             // Treat returning from the dialog like a fresh show.
             *t = Instant::now();

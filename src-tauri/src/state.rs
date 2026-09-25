@@ -72,7 +72,10 @@ impl AppState {
 
     /// Runs `f` against the open library, or reports why it is unavailable.
     pub fn with_library<T>(&self, f: impl FnOnce(&mut Library) -> AppResult<T>) -> AppResult<T> {
-        let mut slot = self.library.lock().map_err(|_| AppError::Internal("library lock poisoned".into()))?;
+        let mut slot = self
+            .library
+            .lock()
+            .map_err(|_| AppError::Internal("library lock poisoned".into()))?;
         let dir = slot.dir.clone();
         let error = slot.error.clone();
         match slot.db.as_mut() {
@@ -90,7 +93,10 @@ impl AppState {
     /// Applies a change to the config and saves it; the in-memory copy only
     /// changes if the save succeeded.
     pub fn update_config(&self, change: impl FnOnce(&mut AppConfig)) -> AppResult<AppConfig> {
-        let mut cfg = self.config.lock().map_err(|_| AppError::Internal("config lock poisoned".into()))?;
+        let mut cfg = self
+            .config
+            .lock()
+            .map_err(|_| AppError::Internal("config lock poisoned".into()))?;
         let mut next = cfg.clone();
         change(&mut next);
         next.save(&self.config_path)?;

@@ -256,7 +256,11 @@ mod tests {
         seed_starter_sparks(&mut lib).unwrap();
         assert_eq!(lib.spark_count().unwrap(), STARTERS.len() as i64);
         let favs = list_favorites(&lib).unwrap();
-        let expected: Vec<&str> = STARTERS.iter().filter(|s| s.favorite).map(|s| s.title).collect();
+        let expected: Vec<&str> = STARTERS
+            .iter()
+            .filter(|s| s.favorite)
+            .map(|s| s.title)
+            .collect();
         let got: Vec<&str> = favs.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(got, expected);
     }

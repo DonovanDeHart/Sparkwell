@@ -18,7 +18,10 @@ pub enum AppError {
 
     /// A Spark with an identical body already exists.
     #[error("A Spark with this exact content already exists: \"{existing_title}\".")]
-    Duplicate { existing_id: i64, existing_title: String },
+    Duplicate {
+        existing_id: i64,
+        existing_title: String,
+    },
 
     /// The library could not be opened or is not currently available.
     #[error("{0}")]
@@ -73,7 +76,11 @@ impl Serialize for AppError {
         let mut s = serializer.serialize_struct("AppError", 4)?;
         s.serialize_field("kind", self.kind())?;
         s.serialize_field("message", &self.to_string())?;
-        if let AppError::Duplicate { existing_id, existing_title } = self {
+        if let AppError::Duplicate {
+            existing_id,
+            existing_title,
+        } = self
+        {
             s.serialize_field("existingId", existing_id)?;
             s.serialize_field("existingTitle", existing_title)?;
         }

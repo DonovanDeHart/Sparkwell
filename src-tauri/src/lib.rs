@@ -49,7 +49,13 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
     let hotkey_status = hotkey::register_initial(app.handle(), &config.hotkey);
     let pinned = config.pinned;
-    app.manage(AppState::new(config_path, default_library_dir, config, slot, hotkey_status));
+    app.manage(AppState::new(
+        config_path,
+        default_library_dir,
+        config,
+        slot,
+        hotkey_status,
+    ));
 
     build_tray(app)?;
 
@@ -81,7 +87,12 @@ fn build_tray(app: &mut App) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
                 window::toggle_from_tray(tray.app_handle());
             }
         });
@@ -96,7 +107,9 @@ fn build_tray(app: &mut App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         // Must be first: a second launch just reveals the running instance.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| window::show(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            window::show(app)
+        }))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -112,7 +125,10 @@ pub fn run() {
                 })
                 .build(),
         )
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![HIDDEN_ARG])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![HIDDEN_ARG]),
+        ))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(setup)

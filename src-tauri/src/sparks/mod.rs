@@ -94,19 +94,30 @@ fn truncate_words(s: &str, max_chars: usize) -> String {
         Some(i) if i > max_chars / 2 => cut[..i].to_string(),
         _ => cut,
     };
-    format!("{}…", cut.trim_end_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace()))
+    format!(
+        "{}…",
+        cut.trim_end_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace())
+    )
 }
 
 /// Derives a readable title from the first meaningful line of a Spark body.
 pub fn derive_title(body: &str) -> String {
     let line = body
         .lines()
-        .map(|l| l.trim().trim_start_matches(['#', '*', '>', '-', '=', '_', '`']).trim())
+        .map(|l| {
+            l.trim()
+                .trim_start_matches(['#', '*', '>', '-', '=', '_', '`'])
+                .trim()
+        })
         .find(|l| !l.is_empty())
         .unwrap_or("Untitled Spark");
     let line = line.trim_end_matches([':', '*', '#', '`']).trim();
     let title = truncate_words(&collapse_whitespace(line), 60);
-    if title.is_empty() { "Untitled Spark".into() } else { title }
+    if title.is_empty() {
+        "Untitled Spark".into()
+    } else {
+        title
+    }
 }
 
 /// Derives a short summary from the body when the user provided none.
@@ -184,7 +195,11 @@ fn clean(input: SparkInput) -> AppResult<CleanInput> {
         )));
     }
     let title_was_derived = typed_title.is_empty();
-    let title = if title_was_derived { derive_title(&body) } else { typed_title };
+    let title = if title_was_derived {
+        derive_title(&body)
+    } else {
+        typed_title
+    };
 
     let typed_summary = collapse_whitespace(&input.summary);
     if typed_summary.chars().count() > MAX_SUMMARY_CHARS {
@@ -214,7 +229,11 @@ fn clean(input: SparkInput) -> AppResult<CleanInput> {
     })
 }
 
-fn find_duplicate(lib: &Library, hash: &str, exclude_id: Option<i64>) -> AppResult<Option<(i64, String)>> {
+fn find_duplicate(
+    lib: &Library,
+    hash: &str,
+    exclude_id: Option<i64>,
+) -> AppResult<Option<(i64, String)>> {
     Ok(lib
         .conn
         .query_row(
@@ -228,8 +247,12 @@ fn find_duplicate(lib: &Library, hash: &str, exclude_id: Option<i64>) -> AppResu
 fn write_tags(tx: &Transaction, spark_id: i64, tags: &[String]) -> AppResult<()> {
     tx.execute("DELETE FROM spark_tags WHERE spark_id = ?1", [spark_id])?;
     for (position, tag) in tags.iter().enumerate() {
-        tx.execute("INSERT INTO tags (name) VALUES (?1) ON CONFLICT(name) DO NOTHING", [tag])?;
-        let tag_id: i64 = tx.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |r| r.get(0))?;
+        tx.execute(
+            "INSERT INTO tags (name) VALUES (?1) ON CONFLICT(name) DO NOTHING",
+            [tag],
+        )?;
+        let tag_id: i64 =
+            tx.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |r| r.get(0))?;
         tx.execute(
             "INSERT INTO spark_tags (spark_id, tag_id, position) VALUES (?1, ?2, ?3)",
             params![spark_id, tag_id, position as i64],
@@ -256,7 +279,10 @@ pub fn create(lib: &mut Library, input: SparkInput) -> AppResult<SparkSummary> {
     let c = clean(input)?;
     if !allow_duplicate {
         if let Some((existing_id, existing_title)) = find_duplicate(lib, &c.body_hash, None)? {
-            return Err(AppError::Duplicate { existing_id, existing_title });
+            return Err(AppError::Duplicate {
+                existing_id,
+                existing_title,
+            });
         }
     }
     let now = now_ms();
@@ -288,12 +314,17 @@ pub fn update(lib: &mut Library, id: i64, input: SparkInput) -> AppResult<SparkS
     let c = clean(input)?;
     let existing: Option<bool> = lib
         .conn
-        .query_row("SELECT favorite FROM sparks WHERE id = ?1", [id], |r| r.get(0))
+        .query_row("SELECT favorite FROM sparks WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
         .optional()?;
     let was_favorite = existing.ok_or(AppError::NotFound)?;
     if !allow_duplicate {
         if let Some((existing_id, existing_title)) = find_duplicate(lib, &c.body_hash, Some(id))? {
-            return Err(AppError::Duplicate { existing_id, existing_title });
+            return Err(AppError::Duplicate {
+                existing_id,
+                existing_title,
+            });
         }
     }
     let now = now_ms();
@@ -305,7 +336,17 @@ pub fn update(lib: &mut Library, id: i64, input: SparkInput) -> AppResult<SparkS
                                     WHEN ?7 = 1 THEN favorited_at ELSE ?8 END,
                 updated_at = ?8, source_note = ?9
          WHERE id = ?1",
-        params![id, c.title, c.summary, c.body, c.body_hash, c.favorite, was_favorite, now, c.source_note],
+        params![
+            id,
+            c.title,
+            c.summary,
+            c.body,
+            c.body_hash,
+            c.favorite,
+            was_favorite,
+            now,
+            c.source_note
+        ],
     )?;
     write_tags(&tx, id, &c.tags)?;
     write_fts(&tx, id, &c)?;
@@ -348,7 +389,9 @@ pub fn set_favorite(lib: &mut Library, id: i64, favorite: bool) -> AppResult<Spa
 pub fn record_copy(lib: &mut Library, id: i64) -> AppResult<(String, String)> {
     let tx = lib.conn.transaction()?;
     let row: Option<(String, String)> = tx
-        .query_row("SELECT title, body FROM sparks WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row("SELECT title, body FROM sparks WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .optional()?;
     let (title, body) = row.ok_or(AppError::NotFound)?;
     tx.execute(
@@ -362,7 +405,9 @@ pub fn record_copy(lib: &mut Library, id: i64) -> AppResult<(String, String)> {
 /// Reads the body without recording usage.
 pub fn body(lib: &Library, id: i64) -> AppResult<(String, String)> {
     lib.conn
-        .query_row("SELECT title, body FROM sparks WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row("SELECT title, body FROM sparks WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .optional()?
         .ok_or(AppError::NotFound)
 }
@@ -424,9 +469,9 @@ pub fn get_detail(lib: &Library, id: i64) -> AppResult<SparkDetail> {
 /// Favorites in the order they were favorited, so rows never jump around.
 pub fn list_favorites(lib: &Library) -> AppResult<Vec<SparkSummary>> {
     let ids: Vec<i64> = {
-        let mut stmt = lib.conn.prepare_cached(
-            "SELECT id FROM sparks WHERE favorite = 1 ORDER BY favorited_at, id",
-        )?;
+        let mut stmt = lib
+            .conn
+            .prepare_cached("SELECT id FROM sparks WHERE favorite = 1 ORDER BY favorited_at, id")?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
@@ -468,8 +513,12 @@ pub fn search_docs(lib: &Library, ids: &[i64]) -> AppResult<Vec<SearchDoc>> {
 }
 
 pub fn all_ids(lib: &Library) -> AppResult<Vec<i64>> {
-    let mut stmt = lib.conn.prepare_cached("SELECT id FROM sparks ORDER BY id")?;
-    let ids = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let mut stmt = lib
+        .conn
+        .prepare_cached("SELECT id FROM sparks ORDER BY id")?;
+    let ids = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
     Ok(ids)
 }
 
@@ -483,7 +532,9 @@ pub fn fts_candidates(lib: &Library, fts_query: &str, limit: usize) -> AppResult
          FROM sparks_fts WHERE sparks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
     )?;
     let rows = stmt
-        .query_map(params![fts_query, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map(params![fts_query, limit as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -493,7 +544,11 @@ mod tests {
     use super::*;
 
     fn input(title: &str, body: &str) -> SparkInput {
-        SparkInput { title: title.into(), body: body.into(), ..Default::default() }
+        SparkInput {
+            title: title.into(),
+            body: body.into(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -529,7 +584,9 @@ mod tests {
     #[test]
     fn overlong_title_is_rejected() {
         let mut lib = Library::open_in_memory();
-        let err = create(&mut lib, input(&"x".repeat(MAX_TITLE_CHARS + 1), "body")).err().unwrap();
+        let err = create(&mut lib, input(&"x".repeat(MAX_TITLE_CHARS + 1), "body"))
+            .err()
+            .unwrap();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
@@ -538,7 +595,10 @@ mod tests {
         let mut lib = Library::open_in_memory();
         let s = create(
             &mut lib,
-            input("", "## Deep Research Protocol:\nInvestigate the topic thoroughly. Cite sources."),
+            input(
+                "",
+                "## Deep Research Protocol:\nInvestigate the topic thoroughly. Cite sources.",
+            ),
         )
         .unwrap();
         assert_eq!(s.title, "Deep Research Protocol");
@@ -548,7 +608,9 @@ mod tests {
     #[test]
     fn very_long_body_round_trips_exactly() {
         let mut lib = Library::open_in_memory();
-        let body: String = (0..20_000).map(|i| format!("Line {i}: do the thing carefully.\n")).collect();
+        let body: String = (0..20_000)
+            .map(|i| format!("Line {i}: do the thing carefully.\n"))
+            .collect();
         let s = create(&mut lib, input("Long", &body)).unwrap();
         let (_, copied) = record_copy(&mut lib, s.id).unwrap();
         assert_eq!(copied, body.trim());
@@ -559,7 +621,9 @@ mod tests {
     fn duplicates_are_detected_unless_allowed() {
         let mut lib = Library::open_in_memory();
         let a = create(&mut lib, input("A", "Same   body\ntext")).unwrap();
-        let err = create(&mut lib, input("B", "Same body text")).err().unwrap();
+        let err = create(&mut lib, input("B", "Same body text"))
+            .err()
+            .unwrap();
         match err {
             AppError::Duplicate { existing_id, .. } => assert_eq!(existing_id, a.id),
             other => panic!("expected duplicate, got {other:?}"),
@@ -584,7 +648,10 @@ mod tests {
         let u = update(&mut lib, s.id, next).unwrap();
         assert_eq!(u.title, "New");
         assert_eq!(u.tags, vec!["fresh"]);
-        let n: i64 = lib.conn.query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0)).unwrap();
+        let n: i64 = lib
+            .conn
+            .query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
         let hits = fts_candidates(&lib, "\"new\"*", 10).unwrap();
         assert_eq!(hits.len(), 1);
@@ -594,7 +661,10 @@ mod tests {
     #[test]
     fn update_missing_spark_is_not_found() {
         let mut lib = Library::open_in_memory();
-        assert!(matches!(update(&mut lib, 99, input("x", "y")), Err(AppError::NotFound)));
+        assert!(matches!(
+            update(&mut lib, 99, input("x", "y")),
+            Err(AppError::NotFound)
+        ));
     }
 
     #[test]
@@ -612,9 +682,15 @@ mod tests {
         let s = create(&mut lib, i).unwrap();
         delete(&mut lib, s.id).unwrap();
         assert!(matches!(get_summary(&lib, s.id), Err(AppError::NotFound)));
-        let tags: i64 = lib.conn.query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0)).unwrap();
+        let tags: i64 = lib
+            .conn
+            .query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(tags, 0);
-        let fts: i64 = lib.conn.query_row("SELECT COUNT(*) FROM sparks_fts", [], |r| r.get(0)).unwrap();
+        let fts: i64 = lib
+            .conn
+            .query_row("SELECT COUNT(*) FROM sparks_fts", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fts, 0);
         assert!(matches!(delete(&mut lib, s.id), Err(AppError::NotFound)));
     }
@@ -646,7 +722,10 @@ mod tests {
         record_copy(&mut lib, s.id).unwrap();
         assert_eq!(get_summary(&lib, s.id).unwrap().usage_count, 2);
         assert!(get_detail(&lib, s.id).unwrap().last_copied_at.is_some());
-        assert!(matches!(record_copy(&mut lib, 999), Err(AppError::NotFound)));
+        assert!(matches!(
+            record_copy(&mut lib, 999),
+            Err(AppError::NotFound)
+        ));
     }
 
     #[test]
@@ -669,7 +748,10 @@ mod tests {
 
     #[test]
     fn derive_title_handles_markdown_and_length() {
-        assert_eq!(derive_title("# Role: Senior Engineer\nbody"), "Role: Senior Engineer");
+        assert_eq!(
+            derive_title("# Role: Senior Engineer\nbody"),
+            "Role: Senior Engineer"
+        );
         assert_eq!(derive_title("\n\n   \n"), "Untitled Spark");
         let long = derive_title(&"word ".repeat(40));
         assert!(long.ends_with('…'));

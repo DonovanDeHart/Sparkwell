@@ -119,7 +119,15 @@ fn classify_key(token: &str) -> Option<(String, KeyClass)> {
 }
 
 const UNUSABLE_KEYS: &[&str] = &[
-    "ESCAPE", "ESC", "TAB", "CAPSLOCK", "NUMLOCK", "SCROLLLOCK", "PRINTSCREEN", "BACKSPACE", "DELETE",
+    "ESCAPE",
+    "ESC",
+    "TAB",
+    "CAPSLOCK",
+    "NUMLOCK",
+    "SCROLLLOCK",
+    "PRINTSCREEN",
+    "BACKSPACE",
+    "DELETE",
 ];
 
 /// Shortcuts Windows reserves for itself even though they pass the rules.
@@ -162,7 +170,9 @@ pub fn validate(accelerator: &str) -> AppResult<String> {
             "SUPER" | "WIN" | "META" | "CMD" | "COMMAND" => sup = true,
             other => {
                 if key.is_some() {
-                    return Err(AppError::HotkeyInvalid("Use only one key with your modifiers.".into()));
+                    return Err(AppError::HotkeyInvalid(
+                        "Use only one key with your modifiers.".into(),
+                    ));
                 }
                 if UNUSABLE_KEYS.contains(&other) {
                     return Err(AppError::HotkeyInvalid(format!(
@@ -170,7 +180,9 @@ pub fn validate(accelerator: &str) -> AppResult<String> {
                     )));
                 }
                 key = Some(classify_key(token).ok_or_else(|| {
-                    AppError::HotkeyInvalid(format!("{token} isn't supported. Try a letter, number, or function key."))
+                    AppError::HotkeyInvalid(format!(
+                        "{token} isn't supported. Try a letter, number, or function key."
+                    ))
                 })?);
             }
         }
@@ -183,7 +195,11 @@ pub fn validate(accelerator: &str) -> AppResult<String> {
 
     match class {
         KeyClass::Typing if modifiers < 2 => {
-            let example = if modifiers == 0 { format!("Ctrl+Alt+{key_name}") } else { "Ctrl+Alt+Space".into() };
+            let example = if modifiers == 0 {
+                format!("Ctrl+Alt+{key_name}")
+            } else {
+                "Ctrl+Alt+Space".into()
+            };
             return Err(AppError::HotkeyInvalid(format!(
                 "Use at least two modifiers (for example {example}) so the shortcut doesn't take over typing in other apps."
             )));
@@ -219,15 +235,20 @@ pub fn validate(accelerator: &str) -> AppResult<String> {
         )));
     }
     // Final guard: the OS-level parser must accept it too.
-    canonical
-        .parse::<Shortcut>()
-        .map_err(|_| AppError::HotkeyInvalid(format!("{} isn't a supported shortcut.", display(&canonical))))?;
+    canonical.parse::<Shortcut>().map_err(|_| {
+        AppError::HotkeyInvalid(format!(
+            "{} isn't a supported shortcut.",
+            display(&canonical)
+        ))
+    })?;
     Ok(canonical)
 }
 
 fn register<R: Runtime>(app: &AppHandle<R>, accelerator: &str) -> Result<(), String> {
     let shortcut: Shortcut = accelerator.parse().map_err(|e| format!("{e}"))?;
-    app.global_shortcut().register(shortcut).map_err(|e| e.to_string())
+    app.global_shortcut()
+        .register(shortcut)
+        .map_err(|e| e.to_string())
 }
 
 fn unregister<R: Runtime>(app: &AppHandle<R>, accelerator: &str) {
@@ -247,9 +268,15 @@ fn conflict_message(accelerator: &str) -> String {
 
 /// Registers the configured shortcut at startup. Failure is recorded, not fatal.
 pub fn register_initial<R: Runtime>(app: &AppHandle<R>, configured: &str) -> HotkeyStatus {
-    let accelerator = validate(configured).unwrap_or_else(|_| crate::settings::DEFAULT_HOTKEY.to_string());
+    let accelerator =
+        validate(configured).unwrap_or_else(|_| crate::settings::DEFAULT_HOTKEY.to_string());
     match register(app, &accelerator) {
-        Ok(()) => HotkeyStatus { accelerator, registered: true, error: None, suspended: false },
+        Ok(()) => HotkeyStatus {
+            accelerator,
+            registered: true,
+            error: None,
+            suspended: false,
+        },
         Err(e) => {
             log::warn!("could not register {accelerator}: {e}");
             HotkeyStatus {
@@ -266,13 +293,17 @@ pub fn register_initial<R: Runtime>(app: &AppHandle<R>, configured: &str) -> Hot
 pub fn change<R: Runtime>(app: &AppHandle<R>, requested: &str) -> AppResult<HotkeyStatus> {
     let state = app.state::<AppState>();
     let canonical = validate(requested)?;
-    let mut hk = state.hotkey.lock().map_err(|_| AppError::Internal("hotkey state poisoned".into()))?;
+    let mut hk = state
+        .hotkey
+        .lock()
+        .map_err(|_| AppError::Internal("hotkey state poisoned".into()))?;
 
     let old = hk.accelerator.clone();
     let old_was_active = hk.registered && !hk.suspended;
     if canonical == old && hk.registered {
         if hk.suspended {
-            register(app, &canonical).map_err(|_| AppError::HotkeyConflict(conflict_message(&canonical)))?;
+            register(app, &canonical)
+                .map_err(|_| AppError::HotkeyConflict(conflict_message(&canonical)))?;
             hk.suspended = false;
         }
         return Ok(hk.clone());
@@ -304,7 +335,12 @@ pub fn change<R: Runtime>(app: &AppHandle<R>, requested: &str) -> AppResult<Hotk
         return Err(err);
     }
 
-    *hk = HotkeyStatus { accelerator: canonical, registered: true, error: None, suspended: false };
+    *hk = HotkeyStatus {
+        accelerator: canonical,
+        registered: true,
+        error: None,
+        suspended: false,
+    };
     Ok(hk.clone())
 }
 
@@ -312,7 +348,10 @@ pub fn change<R: Runtime>(app: &AppHandle<R>, requested: &str) -> AppResult<Hotk
 /// pressing the current combination is captured instead of hiding the panel.
 pub fn suspend<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     let state = app.state::<AppState>();
-    let mut hk = state.hotkey.lock().map_err(|_| AppError::Internal("hotkey state poisoned".into()))?;
+    let mut hk = state
+        .hotkey
+        .lock()
+        .map_err(|_| AppError::Internal("hotkey state poisoned".into()))?;
     if hk.registered && !hk.suspended {
         unregister(app, &hk.accelerator);
         hk.suspended = true;
@@ -323,7 +362,10 @@ pub fn suspend<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
 /// Re-registers a suspended shortcut. Safe to call at any time.
 pub fn resume<R: Runtime>(app: &AppHandle<R>) -> AppResult<HotkeyStatus> {
     let state = app.state::<AppState>();
-    let mut hk = state.hotkey.lock().map_err(|_| AppError::Internal("hotkey state poisoned".into()))?;
+    let mut hk = state
+        .hotkey
+        .lock()
+        .map_err(|_| AppError::Internal("hotkey state poisoned".into()))?;
     if hk.suspended {
         hk.suspended = false;
         if let Err(e) = register(app, &hk.accelerator) {
@@ -344,7 +386,10 @@ mod tests {
     }
 
     fn invalid(a: &str) {
-        assert!(matches!(validate(a), Err(AppError::HotkeyInvalid(_))), "{a} should be invalid");
+        assert!(
+            matches!(validate(a), Err(AppError::HotkeyInvalid(_))),
+            "{a} should be invalid"
+        );
     }
 
     #[test]
@@ -393,7 +438,10 @@ mod tests {
 
     #[test]
     fn default_hotkey_is_valid() {
-        assert_eq!(ok(crate::settings::DEFAULT_HOTKEY), crate::settings::DEFAULT_HOTKEY);
+        assert_eq!(
+            ok(crate::settings::DEFAULT_HOTKEY),
+            crate::settings::DEFAULT_HOTKEY
+        );
     }
 
     #[test]
