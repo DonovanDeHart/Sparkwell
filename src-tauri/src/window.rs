@@ -67,8 +67,8 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let _ = window.hide();
-    // Never leave the activation shortcut unregistered.
-    let _ = crate::hotkey::resume(app);
+    // Never leave the activation shortcut unregistered (e.g. hidden mid-recording).
+    crate::hotkey::resume_if_idle(app);
     let _ = app.emit(EVENT_HIDDEN, ());
 }
 

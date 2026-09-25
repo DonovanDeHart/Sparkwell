@@ -359,6 +359,25 @@ pub fn suspend<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     Ok(())
 }
 
+/// Like [`resume`], but never blocks: used from the window-hide path, which
+/// can run on the main thread. If a hotkey change currently holds the lock it
+/// is waiting on the main thread to register, so blocking here would deadlock;
+/// that change leaves the registration consistent on its own.
+pub fn resume_if_idle<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    let Ok(mut hk) = state.hotkey.try_lock() else {
+        return;
+    };
+    if hk.suspended {
+        hk.suspended = false;
+        if let Err(e) = register(app, &hk.accelerator) {
+            log::warn!("could not re-register {}: {e}", hk.accelerator);
+            hk.registered = false;
+            hk.error = Some(conflict_message(&hk.accelerator));
+        }
+    }
+}
+
 /// Re-registers a suspended shortcut. Safe to call at any time.
 pub fn resume<R: Runtime>(app: &AppHandle<R>) -> AppResult<HotkeyStatus> {
     let state = app.state::<AppState>();
