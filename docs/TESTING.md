@@ -42,17 +42,30 @@ These exercise the real Rust core, real SQLite file, real global shortcut (X11),
 | Custom library folder missing at launch ("unplugged drive") → calm unavailable state; **no empty library created elsewhere**; after reconnecting, *Try again* recovers | ✅ |
 | Two monitors (1920×1080 + 1280×1024 offset at +56) → docks to the monitor under the cursor, respecting its offset top and width clamp; re-docks to the other monitor when summoned there | ✅ |
 
-### Windows (CI, `windows-latest`), release build
+### Windows (CI, `windows-latest`), release build — all 19 checks pass
 
-`scripts/windows-smoke.ps1` installs the produced NSIS package silently and checks the installed app. Results are in the **Windows build, package & smoke test** job log, with a screenshot in the `smoke-artifacts` artifact:
+`scripts/windows-smoke.ps1` installs the produced NSIS package silently and drives the installed app (CI run 36116217949, commit `3d6787e`):
 
-- installs per-user without admin;
-- launches, creates and seeds `%LOCALAPPDATA%\Sparkwell\Library\sparkwell.db`;
-- docks to the right edge of the monitor work area at full work-area height;
-- a second launch exits (single instance);
-- injected `Ctrl+Alt+Space` hides and re-shows the panel via the real Win32 `RegisterHotKey` registration, and the shown panel owns the foreground;
-- relaunch keeps the library;
-- uninstall removes the app but **keeps the library**.
+| Check | Result |
+| --- | --- |
+| Installer places the app in `%LOCALAPPDATA%\Sparkwell` (per-user, no admin) | ✅ |
+| Sidebar window appears on launch; process keeps running | ✅ |
+| Library created and seeded at `%LOCALAPPDATA%\Sparkwell\Library\sparkwell.db` | ✅ |
+| Docked to the right edge of the work area (window L632 T0 R1024 B720 on a 1024×720 work area), full work-area height, compact 392 px width | ✅ |
+| Second launch exits; exactly one Sparkwell process | ✅ |
+| Injected `Ctrl+Alt+Space` hides the panel and shows it again (real `RegisterHotKey`); the shown panel owns the foreground | ✅ |
+| Core loop by keyboard: goal → Enter → Ctrl+Enter → the complete MCP Server Architect body is on the Windows clipboard | ✅ |
+| Unpinned panel collapses after copying | ✅ |
+| Relaunch; a Spark is retrieved and copied again (library persisted) | ✅ |
+| Uninstaller removes the app **and keeps the Spark library** | ✅ |
+
+The `smoke-artifacts` artifact contains a screenshot of the docked panel rendered on Windows (Segoe UI Variable, transparent gutter, focused Fire & Ice goal input) and the app log.
+
+## Performance (release build)
+
+- Release executable: 7.1 MB (Linux); NSIS installer and MSI are produced by CI.
+- Warm activation: hotkey → visible panel in 66–86 ms (Linux/Xvfb, measured with polling overhead).
+- Standard retrieval runs in-process in milliseconds; the pending skeleton only appears if retrieval exceeds 140 ms (semantic queries with a cold model).
 
 ## Visual verification
 
@@ -64,7 +77,7 @@ These need a person at a Windows 11 machine; the logic behind each is covered by
 
 - Physical multi-monitor setups with mixed DPI (dock geometry is unit-tested for mixed scale factors and was verified on a two-monitor X11 layout).
 - 125 / 150 / 200% Windows display scaling in the running app (dock sizing is unit-tested per scale; UI type is rem-based).
-- Pasting a copied Spark into a Windows text editor (Copy uses the Tauri clipboard plugin, backed by the same `arboard` library verified end to end on Linux; the Windows smoke test does not click Copy).
+- Pasting into a specific Windows editor by hand (the complete body landing on the Windows clipboard is verified by CI).
 - A hotkey conflict with a real third-party app (the conflict path is covered by the rollback logic and UI tests).
 
 Suggested 5-minute manual pass on Windows 11: install → press Ctrl+Alt+Space in another app → type a goal → Enter → Ctrl+Enter → paste into Notepad → Settings → record a new hotkey → restart → confirm it works → with two monitors, click into an app on the other monitor and summon Sparkwell there.
