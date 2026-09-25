@@ -193,6 +193,10 @@ pub fn tokens_match(a: &str, b: &str) -> bool {
     short.len() >= 4 && long.starts_with(short)
 }
 
+/// Upper bound on distinct terms considered from one goal. A goal is a
+/// sentence or two; this keeps pasted documents from building huge queries.
+pub const MAX_QUERY_TERMS: usize = 32;
+
 /// Meaningful, stemmed, de-duplicated query terms. Falls back to all terms if
 /// the query consisted only of filler words (e.g. "AI").
 pub fn query_terms(query: &str) -> Vec<String> {
@@ -213,6 +217,9 @@ pub fn query_terms(query: &str) -> Vec<String> {
     for t in picked {
         if !out.contains(&t) {
             out.push(t);
+            if out.len() == MAX_QUERY_TERMS {
+                break;
+            }
         }
     }
     out
@@ -233,6 +240,9 @@ pub fn fts_query(query: &str) -> String {
             continue;
         }
         seen.push(t);
+        if seen.len() > MAX_QUERY_TERMS {
+            break;
+        }
         if t.chars().count() >= 3 {
             parts.push(format!("\"{t}\"*"));
         } else {
@@ -295,6 +305,16 @@ mod tests {
             vec!["resume", "c", "node", "js"]
         );
         assert_eq!(tokenize("日本語 test"), vec!["日本語", "test"]);
+    }
+
+    #[test]
+    fn huge_goals_are_bounded() {
+        let goal: String = (0..5_000).map(|i| format!("word{i} ")).collect();
+        assert_eq!(query_terms(&goal).len(), MAX_QUERY_TERMS);
+        assert_eq!(
+            fts_query(&goal).matches(" OR ").count(),
+            MAX_QUERY_TERMS - 1
+        );
     }
 
     #[test]

@@ -10,8 +10,10 @@
     3. The window docks to the right edge of the monitor work area (taskbar excluded).
     4. A second launch does not create a second instance.
     5. The global activation hotkey (Ctrl+Alt+Space) hides and re-shows the panel.
-    6. The library persists across a restart.
-    7. Uninstalling never deletes the user's library.
+    6. The core loop by keyboard: type a goal, Enter, Ctrl+Enter -> the complete
+       Spark is on the Windows clipboard and the unpinned panel collapses.
+    7. The library persists across a restart (retrieved and copied again).
+    8. Uninstalling never deletes the user's library.
   A screenshot of the docked panel is written to smoke-artifacts/.
 #>
 $ErrorActionPreference = 'Stop'
@@ -22,6 +24,7 @@ $artifacts = Join-Path $root 'smoke-artifacts'
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -66,6 +69,18 @@ function Press-Hotkey {
   [Win]::keybd_event($VK_SPACE, 0, $UP, [UIntPtr]::Zero)
   [Win]::keybd_event($VK_MENU, 0, $UP, [UIntPtr]::Zero)
   [Win]::keybd_event($VK_CONTROL, 0, $UP, [UIntPtr]::Zero)
+}
+
+# Types a goal into the focused panel, retrieves, and copies the Best Match.
+# Returns the clipboard text afterwards.
+function Copy-BestMatch([string]$goal) {
+  Set-Clipboard -Value 'sparkwell-smoke-sentinel'
+  [System.Windows.Forms.SendKeys]::SendWait($goal)
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Start-Sleep -Milliseconds 1200
+  [System.Windows.Forms.SendKeys]::SendWait('^{ENTER}')
+  Start-Sleep -Milliseconds 800
+  return (Get-Clipboard -Raw)
 }
 
 function Save-Screenshot([string]$name, $rect) {
@@ -134,16 +149,30 @@ if ($appeared) {
   Check $hidden 'activation hotkey hides the panel'
   Press-Hotkey
   Check (Wait-Until { [Win]::IsWindowVisible((Find-Sparkwell)) } 3) 'activation hotkey shows the panel again'
-  Check ((Find-Sparkwell) -eq [Win]::GetForegroundWindow()) 'shown panel takes keyboard focus'
+  $focused = Wait-Until { (Find-Sparkwell) -eq [Win]::GetForegroundWindow() } 3
+  Check $focused 'shown panel takes keyboard focus'
+
+  # ---------------------------------------------------------------- core loop
+  if ($focused) {
+    $clip = Copy-BestMatch 'I need AI to help me build an MCP server'
+    Check ($clip -like '*Model Context Protocol*' -and $clip -like '*What the server should do:*') 'Copy Spark puts the complete Best Match Spark on the clipboard'
+    Check (Wait-Until { -not [Win]::IsWindowVisible((Find-Sparkwell)) } 3) 'unpinned panel collapses after copying'
+  }
 }
 
 # ------------------------------------------------------------------ restart persistence
-$before = (Get-Item $library).Length
 Stop-Process -Id $proc.Id -Force
 Start-Sleep -Seconds 1
 $proc = Start-Process -FilePath $exe.FullName -PassThru
-Check (Wait-Until { $h = Find-Sparkwell; $h -ne [IntPtr]::Zero -and [Win]::IsWindowVisible($h) } 30) 'relaunches cleanly'
-Check ((Test-Path $library) -and (Get-Item $library).Length -ge $before) 'library persists across restart'
+$relaunched = Wait-Until { $h = Find-Sparkwell; $h -ne [IntPtr]::Zero -and [Win]::IsWindowVisible($h) } 30
+Check $relaunched 'relaunches cleanly'
+if ($relaunched -and (Wait-Until { (Find-Sparkwell) -eq [Win]::GetForegroundWindow() } 5)) {
+  Start-Sleep -Milliseconds 800
+  $clip = Copy-BestMatch 'research a topic deeply with sources'
+  Check ($clip -like '*meticulous research analyst*') 'library persists across restart (retrieved and copied again)'
+} else {
+  Check $false 'relaunched panel takes focus for the persistence check'
+}
 Stop-Process -Id $proc.Id -Force
 Start-Sleep -Seconds 1
 

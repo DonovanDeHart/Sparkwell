@@ -394,7 +394,7 @@
   line-height: 1.5;
 }
 
-.state-card .path {
+.state-card .state-path {
   margin-top: 10px;
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);

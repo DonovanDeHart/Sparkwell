@@ -51,7 +51,7 @@ export function LibraryUnavailable({ library, onChanged, onOpenSettings }: Libra
         Your library isn't available
       </h2>
       <p>{library.error ?? 'Sparkwell could not open your Spark library.'}</p>
-      <p className="path selectable">{library.file}</p>
+      <p className="state-path selectable">{library.file}</p>
       {error && error !== library.error && <p style={{ marginTop: 8, color: 'var(--danger)' }}>{error}</p>}
       <div className="actions">
         <button type="button" className="button is-ice" disabled={busy} onClick={() => void run(api.retryLibrary)}>

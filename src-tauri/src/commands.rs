@@ -22,6 +22,9 @@ use crate::storage::now_ms;
 use crate::storage::relocate::{self, TargetInfo};
 use crate::window;
 
+/// Longest goal text considered by retrieval.
+const MAX_GOAL_CHARS: usize = 2_000;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSnapshot {
@@ -149,7 +152,8 @@ pub async fn search_sparks<R: Runtime>(
     state: State<'_, AppState>,
     query: String,
 ) -> AppResult<search::SearchOutcome> {
-    let query = query.trim().to_string();
+    // Goals are a sentence or two; bound pathological pastes.
+    let query: String = query.trim().chars().take(MAX_GOAL_CHARS).collect();
     let query_vector = ai::embed_query(&app, &query).await;
     let (scores, indexed) = match &query_vector {
         Some(qv) => {

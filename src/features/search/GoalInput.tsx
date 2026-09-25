@@ -51,6 +51,7 @@ export function GoalInput({ value, onChange, onSubmit, inputRef, disabled, hasRe
           className="goal-input"
           value={value}
           rows={3}
+          maxLength={2000}
           disabled={disabled}
           spellCheck={false}
           autoComplete="off"
