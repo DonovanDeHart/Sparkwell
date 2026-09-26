@@ -48,6 +48,8 @@ export type AiState = 'checking' | 'online' | 'offline';
 export interface AiStatus {
   state: AiState;
   embedModel: string | null;
+  /** The model semantic search needs (shown when it isn't installed). */
+  semanticModel: string;
   /** Small local chat model used by Auto-fill; null when unavailable. */
   chatModel: string | null;
   /** Local chat models exist but all are too large for quick drafting. */

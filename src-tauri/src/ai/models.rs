@@ -1,6 +1,15 @@
 //! Internal model policy. Model selection is intentionally not exposed in the
-//! UI; Sparkwell picks sensible installed models and can be overridden with
-//! `SPARKWELL_EMBED_MODEL` / `SPARKWELL_CHAT_MODEL` for power users.
+//! UI.
+//!
+//! Semantic retrieval uses one canonical embedding model,
+//! [`CANONICAL_EMBED_MODEL`]: the retrieval pipeline (query instruction,
+//! thresholds, calibration) is tuned and tested for it, so Sparkwell never
+//! substitutes whichever other embedding model happens to be installed. If it
+//! is missing, standard search is used and the UI says how to install it.
+//! `SPARKWELL_EMBED_MODEL` overrides this for development only (uncalibrated).
+//!
+//! Smart Add picks a small installed chat model (`SPARKWELL_CHAT_MODEL`
+//! overrides); embedding models are never used as chat models.
 
 use crate::search::profile::clean_goal;
 
@@ -17,8 +26,12 @@ pub struct InstalledModel {
     pub parameters_b: Option<f64>,
 }
 
-/// Preferred embedding models, best first.
-const EMBED_PREFERENCE: &[&str] = &[
+/// Sparkwell's supported semantic-retrieval model (Qwen3 Embedding 8B, Q8_0).
+pub const CANONICAL_EMBED_MODEL: &str = "qwen3-embedding:8b-q8_0";
+
+/// Known embedding-model families. Only used to keep embedding models out of
+/// the chat-model choice; semantic search itself uses the canonical model.
+const EMBEDDING_FAMILIES: &[&str] = &[
     "nomic-embed-text",
     "mxbai-embed-large",
     "snowflake-arctic-embed2",
@@ -68,7 +81,7 @@ pub fn is_cloud(model: &InstalledModel) -> bool {
 pub fn is_embedding_model(name: &str) -> bool {
     let fam = family(name).to_ascii_lowercase();
     fam.contains("embed")
-        || EMBED_PREFERENCE.iter().any(|p| fam == *p)
+        || EMBEDDING_FAMILIES.iter().any(|p| fam == *p)
         || fam.starts_with("bge")
         || fam.starts_with("all-minilm")
         || fam.starts_with("paraphrase-multilingual")
@@ -96,6 +109,9 @@ fn matches_override(m: &InstalledModel, wanted: &str) -> bool {
     m.name == wanted || family(&m.name) == wanted || m.name == format!("{wanted}:latest")
 }
 
+/// The embedding model semantic search uses: the canonical model when it is
+/// installed locally, otherwise none (standard search). A development
+/// override is honoured only if that model is installed.
 pub fn pick_embedding_model(
     models: &[InstalledModel],
     override_name: Option<&str>,
@@ -103,20 +119,14 @@ pub fn pick_embedding_model(
     let candidates: Vec<&InstalledModel> = local(models)
         .filter(|m| is_embedding_model(&m.name))
         .collect();
-    if let Some(wanted) = override_name.map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(m) = candidates.iter().find(|m| matches_override(m, wanted)) {
-            return Some(m.name.clone());
-        }
-    }
-    for pref in EMBED_PREFERENCE {
-        if let Some(m) = candidates
-            .iter()
-            .find(|m| family(&m.name).eq_ignore_ascii_case(pref))
-        {
-            return Some(m.name.clone());
-        }
-    }
-    candidates.first().map(|m| m.name.clone())
+    let wanted = override_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(CANONICAL_EMBED_MODEL);
+    candidates
+        .iter()
+        .find(|m| m.name == wanted || m.name == format!("{wanted}:latest"))
+        .map(|m| m.name.clone())
 }
 
 /// Whether a chat model is small enough for Smart Add.
@@ -175,6 +185,9 @@ pub fn pick_chat_model(models: &[InstalledModel], override_name: Option<&str>) -
     }
 }
 
+/// Sparkwell's retrieval task for Qwen3 Embedding, in the model card's format.
+const QWEN3_QUERY_PREFIX: &str = "Instruct: Given a user's goal, retrieve the reusable AI prompt whose intended purpose best helps accomplish it, matching intention and desired outcome rather than exact wording\nQuery: ";
+
 /// How a model family expects queries and documents to be phrased. Models
 /// trained with task instructions or prefixes retrieve measurably better when
 /// they are used.
@@ -187,15 +200,16 @@ fn embedding_format(model: &str) -> EmbeddingFormat {
     let fam = family(model).to_ascii_lowercase();
     let (query_prefix, document_prefix) = match fam.as_str() {
         "nomic-embed-text" => ("search_query: ", "search_document: "),
-        "mxbai-embed-large" | "snowflake-arctic-embed" => {
-            ("Represent this sentence for searching relevant passages: ", "")
-        }
-        "snowflake-arctic-embed2" => ("query: ", ""),
-        "embeddinggemma" => ("task: search result | query: ", "title: none | text: "),
-        f if f.starts_with("qwen3-embedding") => (
-            "Instruct: Given a user's goal, retrieve the saved AI prompt that best helps accomplish it\nQuery: ",
+        "mxbai-embed-large" | "snowflake-arctic-embed" => (
+            "Represent this sentence for searching relevant passages: ",
             "",
         ),
+        "snowflake-arctic-embed2" => ("query: ", ""),
+        "embeddinggemma" => ("task: search result | query: ", "title: none | text: "),
+        // Qwen3 Embedding is instruction-aware: queries carry a one-sentence
+        // task ("Instruct: {task}\nQuery: {query}"), documents are embedded
+        // as they are (per the model card), so the two are asymmetric.
+        f if f.starts_with("qwen3-embedding") => (QWEN3_QUERY_PREFIX, ""),
         f if f.contains("e5") => ("query: ", "passage: "),
         _ => ("", ""),
     };
@@ -245,25 +259,49 @@ mod tests {
     }
 
     #[test]
-    fn picks_preferred_embedding_model() {
+    fn semantic_search_uses_the_canonical_model() {
         let models = vec![
             m("llama3.2:3b"),
-            m("all-minilm:latest"),
             m("nomic-embed-text:latest"),
+            m("qwen3-embedding:0.6b"),
+            m(CANONICAL_EMBED_MODEL),
         ];
         assert_eq!(
             pick_embedding_model(&models, None).as_deref(),
-            Some("nomic-embed-text:latest")
+            Some(CANONICAL_EMBED_MODEL)
         );
     }
 
     #[test]
-    fn unknown_models_still_usable_for_embeddings() {
-        let models = vec![m("my-custom-embedder:1"), m("someone/fancy-chat:7b")];
-        assert_eq!(
-            pick_embedding_model(&models, None).as_deref(),
-            Some("my-custom-embedder:1")
+    fn other_embedding_models_are_never_substituted() {
+        // Uncalibrated models would give unpredictable quality: standard
+        // search (with install guidance) is used instead.
+        let models = vec![
+            m("nomic-embed-text:latest"),
+            m("qwen3-embedding:0.6b"),
+            m("qwen3-embedding:8b"),
+            m("my-custom-embedder:1"),
+        ];
+        assert_eq!(pick_embedding_model(&models, None), None);
+    }
+
+    #[test]
+    fn embedding_models_are_never_chat_models() {
+        let models = vec![sized(CANONICAL_EMBED_MODEL, 7.6, 8.1)];
+        assert_eq!(pick_chat_model(&models, None), ChatChoice::default());
+    }
+
+    #[test]
+    fn qwen3_queries_carry_the_retrieval_instruction_and_documents_do_not() {
+        let q = query_text(
+            CANONICAL_EMBED_MODEL,
+            "I need AI to help me build an MCP server",
         );
+        assert!(q.starts_with("Instruct: "), "{q}");
+        assert!(q.ends_with("\nQuery: Build an MCP server"), "{q}");
+        assert_eq!(q.matches('\n').count(), 1);
+        let doc = "Title: MCP Server Architect";
+        assert_eq!(document_text(CANONICAL_EMBED_MODEL, doc), doc);
     }
 
     #[test]
@@ -338,17 +376,13 @@ mod tests {
     }
 
     #[test]
-    fn override_is_respected_when_installed() {
-        let models = vec![m("nomic-embed-text:latest"), m("mxbai-embed-large:latest")];
+    fn development_override_is_respected_only_when_installed() {
+        let models = vec![m("nomic-embed-text:latest"), m(CANONICAL_EMBED_MODEL)];
         assert_eq!(
-            pick_embedding_model(&models, Some("mxbai-embed-large")).as_deref(),
-            Some("mxbai-embed-large:latest")
-        );
-        // Unknown override falls back to policy.
-        assert_eq!(
-            pick_embedding_model(&models, Some("missing")).as_deref(),
+            pick_embedding_model(&models, Some("nomic-embed-text")).as_deref(),
             Some("nomic-embed-text:latest")
         );
+        assert_eq!(pick_embedding_model(&models, Some("missing")), None);
     }
 
     #[test]

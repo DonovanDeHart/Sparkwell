@@ -224,7 +224,17 @@ export function createMockBackend() {
     available: true,
     error: null,
   };
-  let ai: AiStatus = { state: 'offline', embedModel: null, chatModel: null, chatModelsTooLarge: false, indexed: 0, total: 0, indexing: false };
+  const OFFLINE: AiStatus = {
+    state: 'offline',
+    embedModel: null,
+    semanticModel: 'qwen3-embedding:8b-q8_0',
+    chatModel: null,
+    chatModelsTooLarge: false,
+    indexed: 0,
+    total: 0,
+    indexing: false,
+  };
+  let ai: AiStatus = { ...OFFLINE };
 
   const emit = (event: string, payload: unknown) => listeners.get(event)?.forEach((h) => h(payload));
   const summary = (s: MockSpark): SparkSummary => ({
@@ -267,8 +277,8 @@ export function createMockBackend() {
   }
 
   function clean(input: SparkInput) {
-    const body = input.body.trim();
-    if (!body) throw { kind: 'validation', message: 'Paste or type the Spark itself before saving.' };
+    const body = input.body;
+    if (!body.trim()) throw { kind: 'validation', message: 'Paste or type the Spark itself before saving.' };
     const title = input.title.trim().replace(/\s+/g, ' ');
     if (title.length > 120) throw { kind: 'validation', message: 'Keep the title under 120 characters.' };
     const firstLine = body.split('\n').find((l) => l.trim())?.replace(/^[#*>\-\s]+/, '').trim() ?? 'Untitled Spark';
@@ -519,7 +529,7 @@ export function createMockBackend() {
       hotkey = options?.firstRun
         ? { accelerator: '', registered: false, error: null }
         : { accelerator: 'Ctrl+Shift+Space', registered: true, error: null };
-      ai = { state: 'offline', embedModel: null, chatModel: null, chatModelsTooLarge: false, indexed: 0, total: 0, indexing: false };
+      ai = { ...OFFLINE };
       failures.clear();
       delays.clear();
       control.searchFallback = null;

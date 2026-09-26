@@ -34,13 +34,15 @@ pub const EVENT_AI_STATUS: &str = "sparkwell://ai-status";
 
 /// Texts per `/api/embed` request while indexing.
 const BATCH_TEXTS: usize = 16;
-/// A query embedding from a model that is already loaded answers in well under
-/// a second; this budget only absorbs a busy moment.
-const QUERY_TIMEOUT_WARM: Duration = Duration::from_secs(5);
-/// A cold model must first be loaded into memory. Waiting (with a visible
-/// "waking up" state) gives a consistent semantic result instead of silently
-/// switching to standard search.
-const QUERY_TIMEOUT_COLD: Duration = Duration::from_secs(25);
+/// Measured with qwen3-embedding:8b-q8_0 on an RTX 5090: a loaded model
+/// answers a query in ~30 ms (p95 ~45 ms), but the first requests right after
+/// a load took up to ~4.6 s once. This budget absorbs that and a busy moment.
+const QUERY_TIMEOUT_WARM: Duration = Duration::from_secs(8);
+/// A cold model must first be loaded into GPU memory (~2.3 s from the OS
+/// cache, longer from disk after a reboot or while VRAM is contended).
+/// Waiting with a visible "waking up" state gives a consistent semantic
+/// result instead of silently switching to standard search.
+const QUERY_TIMEOUT_COLD: Duration = Duration::from_secs(30);
 /// Ollama keeps the embedding model loaded for 30 minutes after use.
 const WARM_WINDOW: Duration = Duration::from_secs(25 * 60);
 const POOL_TIMEOUT: Duration = Duration::from_secs(90);
@@ -60,11 +62,14 @@ pub enum AiState {
     Offline,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiStatus {
     pub state: AiState,
+    /// The embedding model in use (the canonical one, when installed).
     pub embed_model: Option<String>,
+    /// The model semantic search needs, for the "not installed" guidance.
+    pub semantic_model: &'static str,
     /// Small local chat model used by Smart Add (None: Auto-fill unavailable).
     pub chat_model: Option<String>,
     /// Local chat models exist but are all too large for Smart Add.
@@ -73,6 +78,21 @@ pub struct AiStatus {
     pub indexed: usize,
     pub total: usize,
     pub indexing: bool,
+}
+
+impl Default for AiStatus {
+    fn default() -> Self {
+        Self {
+            state: AiState::default(),
+            embed_model: None,
+            semantic_model: models::CANONICAL_EMBED_MODEL,
+            chat_model: None,
+            chat_models_too_large: false,
+            indexed: 0,
+            total: 0,
+            indexing: false,
+        }
+    }
 }
 
 impl AiStatus {
@@ -340,6 +360,15 @@ fn load_pending(lib: &Library, model: &str, indexed: &HashSet<i64>) -> AppResult
     Ok(out)
 }
 
+/// Drops cached vectors from any other embedding model or profile recipe.
+/// Only the vector cache is touched; Sparks themselves never are.
+fn purge_stale_vectors(lib: &mut Library, model: &str) -> AppResult<usize> {
+    Ok(lib.conn.execute(
+        "DELETE FROM embeddings WHERE model != ?1 OR profile_version != ?2",
+        params![model, PROFILE_VERSION],
+    )?)
+}
+
 /// Stores vectors, skipping Sparks that were edited or deleted meanwhile.
 fn store_vectors(
     lib: &mut Library,
@@ -364,9 +393,9 @@ fn store_vectors(
             continue;
         }
         tx.execute(
-            "INSERT OR REPLACE INTO embeddings (spark_id, model, dimensions, vector, content_hash, generated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![pending.id, model, dims as i64, encode_views(&views), pending.hash, now_ms()],
+            "INSERT OR REPLACE INTO embeddings (spark_id, model, dimensions, vector, content_hash, generated_at, profile_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![pending.id, model, dims as i64, encode_views(&views), pending.hash, now_ms(), PROFILE_VERSION],
         )?;
         stored.push((pending.id, views));
     }
@@ -401,6 +430,11 @@ async fn index_pending<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let generation = state.generation();
+    match state.write_library(|lib| purge_stale_vectors(lib, &model)) {
+        Ok(0) => {}
+        Ok(n) => log::info!("dropped {n} cached vectors from another model or profile version"),
+        Err(e) => log::warn!("couldn't drop stale vectors: {e}"),
+    }
     let indexed: HashSet<i64> = state
         .vectors
         .read()
@@ -417,6 +451,8 @@ async fn index_pending<R: Runtime>(app: &AppHandle<R>) {
         _ => return,
     };
     set_status(app, |s| s.indexing = true);
+    let started = Instant::now();
+    let mut done = 0usize;
 
     for (i, batch) in batches(&pending).into_iter().enumerate() {
         let inputs: Vec<String> = batch.iter().flat_map(|p| p.texts.iter().cloned()).collect();
@@ -438,6 +474,7 @@ async fn index_pending<R: Runtime>(app: &AppHandle<R>) {
                     .collect();
                 match state.write_library(|lib| store_vectors(lib, &model, &batch, per_spark)) {
                     Ok(stored) => {
+                        done += stored.len();
                         if let Ok(mut index) = state.vectors.write() {
                             if index.model.as_deref() == Some(model.as_str()) {
                                 for (id, views) in stored {
@@ -467,6 +504,11 @@ async fn index_pending<R: Runtime>(app: &AppHandle<R>) {
             }
         }
     }
+    log::info!(
+        "indexed {done} of {} Sparks with {model} in {:.1}s",
+        pending.len(),
+        started.elapsed().as_secs_f64()
+    );
     set_status(app, |s| s.indexing = false);
 }
 
@@ -733,7 +775,8 @@ mod tests {
         // A row written by an earlier build (single vector, old hash).
         lib.conn
             .execute(
-                "INSERT INTO embeddings VALUES (?1, 'm', 2, x'0000803f00000000', 'old-hash', 0)",
+                "INSERT INTO embeddings (spark_id, model, dimensions, vector, content_hash, generated_at)
+                 VALUES (?1, 'm', 2, x'0000803f00000000', 'old-hash', 0)",
                 [a.id],
             )
             .unwrap();
@@ -742,6 +785,71 @@ mod tests {
             "stale vectors are re-embedded, not used"
         );
         assert_eq!(load_pending(&lib, "m", &HashSet::new()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn switching_models_invalidates_only_the_vector_cache() {
+        let mut lib = Library::open_in_memory();
+        let body = "  You are an MCP expert.\r\n\r\nHelp me build a server.\n\n";
+        let a = sparks::create(
+            &mut lib,
+            SparkInput {
+                title: "MCP Server Architect".into(),
+                body: body.into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Current vectors for the old model, and for the new model with an
+        // old profile recipe.
+        let batch_old = load_pending(&lib, "old-model", &HashSet::new()).unwrap();
+        let refs: Vec<&Pending> = batch_old.iter().collect();
+        store_vectors(&mut lib, "old-model", &refs, fake_vectors(&refs, 3)).unwrap();
+        let batch_new = load_pending(&lib, "new-model", &HashSet::new()).unwrap();
+        let refs: Vec<&Pending> = batch_new.iter().collect();
+        store_vectors(&mut lib, "new-model", &refs, fake_vectors(&refs, 3)).unwrap();
+        lib.conn
+            .execute(
+                "UPDATE embeddings SET profile_version = 'profile-v0' WHERE model = 'new-model'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            indexed_ids(&lib, "new-model").is_empty(),
+            "old recipe never mixed in"
+        );
+
+        assert_eq!(purge_stale_vectors(&mut lib, "new-model").unwrap(), 2);
+        let rows: i64 = lib
+            .conn
+            .query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+        // The Spark itself is untouched, byte for byte.
+        assert_eq!(sparks::get_detail(&lib, a.id).unwrap().body, body);
+        assert_eq!(
+            load_pending(&lib, "new-model", &HashSet::new())
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Re-indexed vectors record model, recipe and dimensions.
+        let refs: Vec<&Pending> = batch_new.iter().collect();
+        store_vectors(&mut lib, "new-model", &refs, fake_vectors(&refs, 3)).unwrap();
+        let (model, version, dims): (String, String, i64) = lib
+            .conn
+            .query_row(
+                "SELECT model, profile_version, dimensions FROM embeddings",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (model.as_str(), version.as_str(), dims),
+            ("new-model", PROFILE_VERSION, 3)
+        );
+        assert_eq!(indexed_ids(&lib, "new-model").len(), 1);
     }
 
     #[test]

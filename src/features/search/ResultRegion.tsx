@@ -20,7 +20,7 @@ interface ResultRegionProps {
 
 const FALLBACK_TEXT: Record<Fallback, string> = {
   offline: 'Standard search · local intelligence offline',
-  noEmbeddingModel: 'Standard search · no local embedding model installed',
+  noEmbeddingModel: 'Standard search · semantic model not installed',
   indexing: 'Standard search · local intelligence is still indexing',
   timedOut: "Standard search · local intelligence didn't answer in time",
   failed: 'Standard search · local intelligence unavailable',

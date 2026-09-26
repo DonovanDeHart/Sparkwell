@@ -293,8 +293,10 @@ fn body_hash(body: &str) -> String {
 }
 
 fn clean(input: SparkInput) -> AppResult<CleanInput> {
-    let body = input.body.trim().to_string();
-    if body.is_empty() {
+    // The body is stored exactly as given, byte for byte: it is what Copy Spark
+    // hands back. Retrieval uses separate, derived profiles (search::profile).
+    let body = input.body;
+    if body.trim().is_empty() {
         return Err(AppError::Validation(
             "Paste or type the Spark itself before saving.".into(),
         ));
@@ -707,7 +709,8 @@ mod tests {
         assert_eq!(s.tags, vec!["MCP", "architecture"]);
         assert!(s.favorite);
         let d = get_detail(&lib, s.id).unwrap();
-        assert_eq!(d.body, "You are an MCP expert.");
+        // Stored exactly as pasted: Copy Spark returns the original.
+        assert_eq!(d.body, "\n\nYou are an MCP expert.\n");
         assert_eq!(list_favorites(&lib).unwrap().len(), 1);
     }
 
@@ -750,7 +753,7 @@ mod tests {
             .collect();
         let s = create(&mut lib, input("Long", &body)).unwrap();
         let (_, copied) = record_copy(&mut lib, s.id).unwrap();
-        assert_eq!(copied, body.trim());
+        assert_eq!(copied, body);
         assert!(get_summary(&lib, s.id).unwrap().summary.chars().count() <= 181);
     }
 
@@ -776,7 +779,8 @@ mod tests {
         let s = create(&mut lib, input("Old", "old body")).unwrap();
         lib.conn
             .execute(
-                "INSERT INTO embeddings VALUES (?1, 'm', 1, x'0000803f', 'h', 0)",
+                "INSERT INTO embeddings (spark_id, model, dimensions, vector, content_hash, generated_at)
+                 VALUES (?1, 'm', 1, x'0000803f', 'h', 0)",
                 [s.id],
             )
             .unwrap();

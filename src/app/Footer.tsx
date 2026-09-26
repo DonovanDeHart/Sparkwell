@@ -11,7 +11,7 @@ export function Footer({ ai }: { ai: AiStatus | null }) {
         {indexing && (
           <>
             <span className="pulse-dot" aria-hidden="true" />
-            Indexing for local intelligence · {ai.indexed}/{ai.total}
+            Indexing Sparks… {ai.indexed}/{ai.total}
           </>
         )}
       </span>

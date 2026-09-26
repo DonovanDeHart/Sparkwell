@@ -4,9 +4,10 @@
 //! Spark and dilutes its purpose. Instead each Spark is represented by several
 //! short *views*:
 //!
-//! 1. a compact profile — title, summary, purpose (opening instructions), what
-//!    it needs from the user (the trailing input placeholder), tags, and the
-//!    topics its sections cover (sampled across the *whole* body);
+//! 1. a compact, labelled profile — title, summary, purpose (opening
+//!    instructions), what it needs from the user (the trailing input
+//!    placeholder), tags, and the topics its sections cover (sampled across
+//!    the *whole* body);
 //! 2. up to [`MAX_PASSAGES`] passages spread evenly across the body, each
 //!    prefixed with the Spark's identity so it can't be mistaken for another.
 //!
@@ -18,7 +19,7 @@
 //! stored embedding's content hash, so changing the recipe re-indexes.
 
 /// Bump when the view recipe changes so stored vectors are re-embedded.
-pub const PROFILE_VERSION: &str = "profile-v2";
+pub const PROFILE_VERSION: &str = "profile-v3";
 
 /// Passages sampled from the body (in addition to the profile view).
 pub const MAX_PASSAGES: usize = 4;
@@ -243,9 +244,11 @@ pub fn purpose_and_needs(body: &str) -> (String, Vec<String>) {
 pub fn profile_text(src: &ProfileSource) -> String {
     let (purpose, needs) = purpose_and_needs(src.body);
     let topics = section_topics(src.body);
-    let mut parts = vec![src.title.to_string()];
+    // Labelled fields: the embedding model reads the profile as a
+    // description of what the Spark is for, not as prompt text.
+    let mut parts = vec![format!("Title: {}", src.title)];
     if !src.summary.is_empty() {
-        parts.push(src.summary.to_string());
+        parts.push(format!("Summary: {}", src.summary));
     }
     parts.push(format!("Purpose: {purpose}"));
     if !needs.is_empty() {
@@ -404,7 +407,9 @@ mod tests {
     fn profile_captures_purpose_needs_and_topics() {
         let tags = vec!["MCP".to_string(), "Architecture".to_string()];
         let p = profile_text(&src("MCP Server Architect", &tags, MCP_BODY));
-        assert!(p.starts_with("MCP Server Architect\nDesign and build MCP servers."));
+        assert!(
+            p.starts_with("Title: MCP Server Architect\nSummary: Design and build MCP servers.")
+        );
         assert!(p.contains("Purpose: You are an expert in the Model Context Protocol (MCP) and production backend engineering. Help me design and build an MCP server."));
         assert!(p.contains(
             "Needs: What the server should do: Describe the server's purpose and data sources"

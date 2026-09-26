@@ -25,19 +25,10 @@ use rusqlite::params;
 use crate::error::AppResult;
 use crate::storage::Library;
 
+use super::{Calibration, CALIBRATION};
+
 /// Below this many indexed Sparks the corrections are too noisy to trust.
 pub const MIN_INDEXED: usize = 5;
-/// The profile view is weighted slightly above passages: it states purpose.
-const PROFILE_WEIGHT: f32 = 1.05;
-/// Soft maximum over views: mostly the best view, partly the second best.
-const BEST_VIEW: f32 = 0.75;
-/// Hub level = mean similarity to this many nearest generic goals.
-const HUB_NEIGHBOURS: usize = 10;
-/// Scale = this many times the typical spread of similarities for the model
-/// (0.30 for qwen3-embedding:0.6b, where it was calibrated).
-const SCALE_SPREADS: f32 = 4.1;
-const SCALE_MIN: f32 = 0.15;
-const SCALE_MAX: f32 = 0.6;
 
 #[derive(Debug, Default)]
 pub struct VectorIndex {
@@ -50,6 +41,7 @@ pub struct VectorIndex {
     /// Per Spark: (hub level, spread of its similarities to the pool).
     corrections: HashMap<i64, (f32, f32)>,
     spread_sum: f32,
+    cal: Calibration,
 }
 
 /// One Spark's semantic evidence for a query.
@@ -62,10 +54,20 @@ pub struct Evidence {
 
 impl VectorIndex {
     pub fn empty(model: Option<String>) -> Self {
+        Self::with_calibration(model, CALIBRATION)
+    }
+
+    /// An index using other calibration values (tests and tuning).
+    pub fn with_calibration(model: Option<String>, cal: Calibration) -> Self {
         Self {
             model,
+            cal,
             ..Default::default()
         }
+    }
+
+    pub fn calibration(&self) -> Calibration {
+        self.cal
     }
 
     /// Model-specific scale that maps corrected similarity onto 0..=1.
@@ -74,7 +76,7 @@ impl VectorIndex {
             return 0.30;
         }
         let typical = self.spread_sum / self.corrections.len() as f32;
-        (typical * SCALE_SPREADS).clamp(SCALE_MIN, SCALE_MAX)
+        (typical * self.cal.scale_spreads).clamp(self.cal.scale_min, self.cal.scale_max)
     }
 
     pub fn len(&self) -> usize {
@@ -153,14 +155,14 @@ impl VectorIndex {
         self.spread_sum = self.corrections.values().map(|c| c.1).sum();
     }
 
-    fn view_similarity(query: &[f32], views: &[Vec<f32>]) -> f32 {
+    fn view_similarity(&self, query: &[f32], views: &[Vec<f32>]) -> f32 {
         let mut sims: Vec<f32> = views
             .iter()
             .enumerate()
             .map(|(i, v)| {
                 let s = dot(query, v);
                 if i == 0 {
-                    s * PROFILE_WEIGHT
+                    s * self.cal.profile_weight
                 } else {
                     s
                 }
@@ -170,7 +172,7 @@ impl VectorIndex {
         match sims.as_slice() {
             [] => 0.0,
             [only] => *only,
-            [best, second, ..] => BEST_VIEW * best + (1.0 - BEST_VIEW) * second,
+            [best, second, ..] => self.cal.best_view * best + (1.0 - self.cal.best_view) * second,
         }
     }
 
@@ -179,13 +181,13 @@ impl VectorIndex {
         let mut sims: Vec<f32> = self
             .pool
             .iter()
-            .map(|p| Self::view_similarity(p, views))
+            .map(|p| self.view_similarity(p, views))
             .collect();
         let n = sims.len().max(1) as f32;
         let mean = sims.iter().sum::<f32>() / n;
         let spread = (sims.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / n).sqrt();
         sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-        let k = HUB_NEIGHBOURS.min(sims.len()).max(1);
+        let k = self.cal.hub_neighbours.min(sims.len()).max(1);
         let hub = sims.iter().take(k).sum::<f32>() / k as f32;
         (hub, spread)
     }
@@ -202,7 +204,7 @@ impl VectorIndex {
             .iter()
             .map(|(id, views)| {
                 let hub = self.corrections.get(id).map(|c| c.0).unwrap_or(0.0);
-                let raw = Self::view_similarity(&q, views) - hub;
+                let raw = self.view_similarity(&q, views) - hub;
                 Evidence {
                     id: *id,
                     score: (raw / scale).clamp(0.0, 1.0) as f64,
@@ -218,8 +220,9 @@ impl VectorIndex {
         Some(dot(va, vb))
     }
 
-    /// Loads stored vectors for `model` whose content hash still matches the
-    /// Spark's current views (`expected`); stale or foreign rows are skipped.
+    /// Loads stored vectors for `model` and the current profile recipe whose
+    /// content hash still matches the Spark's views (`expected`); vectors from
+    /// other models, recipes or edited Sparks are never mixed in.
     pub fn load(
         lib: &Library,
         model: &str,
@@ -227,9 +230,10 @@ impl VectorIndex {
     ) -> AppResult<VectorIndex> {
         let mut index = VectorIndex::empty(Some(model.to_string()));
         let mut stmt = lib.conn.prepare(
-            "SELECT spark_id, dimensions, vector, content_hash FROM embeddings WHERE model = ?1",
+            "SELECT spark_id, dimensions, vector, content_hash FROM embeddings
+             WHERE model = ?1 AND profile_version = ?2",
         )?;
-        let rows = stmt.query_map(params![model], |r| {
+        let rows = stmt.query_map(params![model, super::profile::PROFILE_VERSION], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
@@ -305,10 +309,12 @@ mod tests {
     fn soft_maximum_prefers_the_best_view() {
         let q = unit(&[1.0, 0.0]);
         let views = vec![unit(&[0.0, 1.0]), unit(&[1.0, 0.0])];
-        let s = VectorIndex::view_similarity(&q, &views);
+        let index = VectorIndex::empty(None);
+        let s = index.view_similarity(&q, &views);
+        let expected = CALIBRATION.best_view;
         assert!(
-            (s - 0.75).abs() < 1e-6,
-            "0.75 * best + 0.25 * second, got {s}"
+            (s - expected).abs() < 1e-6,
+            "best_view * best + (1 - best_view) * second, got {s}"
         );
     }
 

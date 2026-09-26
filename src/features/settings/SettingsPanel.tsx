@@ -27,7 +27,7 @@ function intelligenceText(ai: AiStatus): { title: string; detail: string | null;
   if (!ai.embedModel)
     return {
       title: 'Ollama running · standard search active',
-      detail: 'Install an embedding model (for example: ollama pull nomic-embed-text) to enable semantic search.',
+      detail: `Local semantic search is not ready. Install its model with: ollama pull ${ai.semanticModel}`,
       ready: false,
     };
   return {

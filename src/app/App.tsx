@@ -20,6 +20,7 @@ type Overlay = { kind: 'settings' } | EditorMode | null;
 const OFFLINE_AI: AiStatus = {
   state: 'checking',
   embedModel: null,
+  semanticModel: 'qwen3-embedding:8b-q8_0',
   chatModel: null,
   chatModelsTooLarge: false,
   indexed: 0,

@@ -127,7 +127,7 @@ describe('Sparkwell sidebar', () => {
 
   it('labels semantic results when local intelligence is ready', async () => {
     const user = await renderApp();
-    act(() => mock.setAi({ state: 'online', embedModel: 'nomic-embed-text', chatModel: null }));
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: null }));
     await searchFor(user, 'build an mcp server');
     expect(await screen.findByText(/Matched by local intelligence/)).toBeInTheDocument();
     expect(screen.queryByText(/Standard search/)).not.toBeInTheDocument();
@@ -135,7 +135,7 @@ describe('Sparkwell sidebar', () => {
 
   it('never switches to standard search silently', async () => {
     const user = await renderApp();
-    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:0.6b', chatModel: null }));
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: null }));
     mock.searchFallback = 'timedOut';
     await searchFor(user, 'build an mcp server');
     expect(await screen.findByText("Standard search · local intelligence didn't answer in time")).toBeInTheDocument();
@@ -146,9 +146,42 @@ describe('Sparkwell sidebar', () => {
     expect(await screen.findByText('Standard search · local intelligence is still indexing')).toBeInTheDocument();
   });
 
+  it('says when the semantic model is missing and keeps standard search working', async () => {
+    const user = await renderApp();
+    act(() => mock.setAi({ state: 'online', embedModel: null, chatModel: null }));
+    await searchFor(user, 'I need AI to help me build an MCP server.');
+    expect(within(await screen.findByRole('article')).getByText('MCP Server Architect')).toBeInTheDocument();
+    expect(screen.getByText('Standard search · semantic model not installed')).toBeInTheDocument();
+    // Library actions don't depend on it.
+    await user.click(screen.getByRole('button', { name: 'Copy Codex Architecture Expert' }));
+    await screen.findByText(/Copied “Codex Architecture Expert”/);
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).getByText(/Local semantic search is not ready/)).toHaveTextContent(
+      'ollama pull qwen3-embedding:8b-q8_0',
+    );
+  });
+
+  it('keeps everything working with Ollama offline', async () => {
+    const user = await renderApp();
+    act(() => mock.setAi({ state: 'offline', embedModel: null, chatModel: null }));
+    await searchFor(user, 'I need AI to help me build an MCP server.');
+    expect(within(await screen.findByRole('article')).getByText('MCP Server Architect')).toBeInTheDocument();
+    expect(screen.getByText('Standard search · local intelligence offline')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /^Favorites/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    expect(await screen.findByRole('dialog', { name: 'Add New Spark' })).toBeInTheDocument();
+  });
+
+  it('shows unobtrusive indexing progress', async () => {
+    await renderApp();
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', indexing: true, indexed: 3, total: 8 }));
+    expect(await screen.findByText(/Indexing Sparks… 3\/8/)).toBeInTheDocument();
+  });
+
   it('shows a calm waking state while local intelligence loads its model', async () => {
     const user = await renderApp();
-    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:0.6b', chatModel: null }));
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: null }));
     mock.delay('search_sparks', 1700);
     await searchFor(user, 'build an mcp server');
     expect(await screen.findByText('Finding your Spark…')).toBeInTheDocument();
@@ -320,6 +353,23 @@ describe('Add New Spark', () => {
     });
   });
 
+  it('stores and copies a pasted Spark exactly as it was written', async () => {
+    const user = await renderApp();
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add New Spark' });
+    const body = within(dialog).getByLabelText(/^Spark/);
+    await waitFor(() => expect(body).toHaveFocus());
+    const pasted = '\n# Board Memo\n\nYou are a strategy advisor.  \n\t- Frame 2–4 options 🚀\n\n[Describe the decision]\n\n';
+    await user.paste(pasted);
+    await user.type(within(dialog).getByLabelText(/^Title/), 'Board Memo');
+    await user.click(within(dialog).getByRole('button', { name: /Save Spark/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect((calls('create_spark')[0]!.args!.input as { body: string }).body).toBe(pasted);
+    await searchFor(user, 'Board Memo');
+    await user.click(within(await screen.findByRole('article')).getByRole('button', { name: /Copy Spark/ }));
+    await waitFor(() => expect(mock.lastClipboard).toBe(pasted));
+  });
+
   it('requires the Spark body', async () => {
     const user = await renderApp();
     await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
@@ -357,7 +407,7 @@ describe('Add New Spark', () => {
 
   it('drafts editable metadata only when asked, never on paste', async () => {
     const user = await renderApp();
-    act(() => mock.setAi({ state: 'online', embedModel: 'nomic-embed-text', chatModel: 'qwen2.5:3b' }));
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: 'qwen2.5:3b' }));
     await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
     const dialog = await screen.findByRole('dialog');
     const body = within(dialog).getByLabelText(/^Spark/);
@@ -378,7 +428,7 @@ describe('Add New Spark', () => {
   it('explains that Auto-fill needs a small model when only large ones are installed', async () => {
     const user = await renderApp();
     act(() =>
-      mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:0.6b', chatModel: null, chatModelsTooLarge: true }),
+      mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: null, chatModelsTooLarge: true }),
     );
     await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
     const dialog = await screen.findByRole('dialog');

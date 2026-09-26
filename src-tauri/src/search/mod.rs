@@ -37,24 +37,71 @@ const AMBIGUITY_MARGIN: f64 = 0.10;
 /// is close (e.g. an exact title typed as the goal).
 const DECISIVE_MATCH: f64 = 0.8;
 
-/// Semantic mode: fused = SEM_WEIGHT · semantic + LEX_WEIGHT · lexical, where
-/// lexical terms are weighted by how rare they are in the library so a shared
-/// common word ("research", "sources") can't outvote meaning.
-const SEM_WEIGHT: f64 = 0.6;
-const LEX_WEIGHT: f64 = 0.4;
-/// Sparks not embedded yet (brief, while indexing) compete on words alone.
-const UNINDEXED_FACTOR: f64 = 0.85;
-/// Semantic mode confidence. Calibrated on the physical acceptance library
-/// (tests/semantic_regression.rs) in the middle of the range where no known
-/// goal gets a confidently wrong answer (T 0.22–0.38, M 0.12–0.14 all hold).
-const SEM_STRONG: f64 = 0.30;
-const SEM_MARGIN: f64 = 0.12;
-const SEM_CANDIDATE_MIN: f64 = 0.10;
-/// Two leading Sparks whose purposes are this alike are interchangeable for
-/// the goal, so a narrow lead between them isn't treated as ambiguity.
-const SAME_PURPOSE: f32 = 0.85;
 /// Purpose similarity is precomputed for this many leading semantic candidates.
 const PURPOSE_CANDIDATES: usize = 12;
+
+/// Semantic-mode calibration: one set of values for the one canonical
+/// embedding model (`ai::models::CANONICAL_EMBED_MODEL`), measured on the
+/// physical acceptance library and its paraphrases (tests/semantic_regression.rs
+/// replays the recorded vectors; tests/semantic_tune.rs sweeps these values).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Calibration {
+    /// fused = sem_weight · semantic + lex_weight · lexical, where lexical
+    /// terms are weighted by their rarity in the library so a shared common
+    /// word ("research", "sources") can't outvote meaning.
+    pub sem_weight: f64,
+    pub lex_weight: f64,
+    /// Sparks not embedded yet (brief, while indexing) compete on words alone.
+    pub unindexed_factor: f64,
+    /// A Best Match needs a fused score of at least `strong`…
+    pub strong: f64,
+    /// …and a lead of `margin` over the runner-up, unless the two are
+    /// interchangeable (profile similarity ≥ `same_purpose`).
+    pub margin: f64,
+    pub same_purpose: f32,
+    /// Minimum fused score for a Spark to be offered among the closest.
+    pub candidate_min: f64,
+    /// The profile view is weighted above passages: it states purpose.
+    pub profile_weight: f32,
+    /// Soft maximum over views: mostly the best view, partly the second best.
+    pub best_view: f32,
+    /// Hub level = mean similarity to this many nearest generic goals.
+    pub hub_neighbours: usize,
+    /// Scale = this many times the typical spread of similarities, clamped.
+    pub scale_spreads: f32,
+    pub scale_min: f32,
+    pub scale_max: f32,
+}
+
+/// Calibrated for qwen3-embedding:8b-q8_0 (tests/semantic_tune.rs) on the
+/// acceptance goals, 36 paraphrases and 23 validation goals. The 8B model's
+/// similarities spread much wider than the 0.6B model's, so the scale is
+/// larger (≈0.53 on the acceptance library) and semantics weigh more; the hub
+/// level is the mean over the whole generic pool. The margin is the
+/// zero-wrong choice: the closest confidently wrong candidate among those
+/// goals leads by 0.16, so a margin of 0.18 keeps a safety gap. Lower
+/// margins make more correct answers confident but let that one through.
+pub const CALIBRATION: Calibration = Calibration {
+    sem_weight: 0.8,
+    lex_weight: 0.2,
+    unindexed_factor: 0.85,
+    strong: 0.24,
+    margin: 0.18,
+    same_purpose: 0.9,
+    candidate_min: 0.10,
+    profile_weight: 1.05,
+    best_view: 0.75,
+    hub_neighbours: 40,
+    scale_spreads: 10.0,
+    scale_min: 0.15,
+    scale_max: 0.8,
+};
+
+impl Default for Calibration {
+    fn default() -> Self {
+        CALIBRATION
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +166,8 @@ pub struct Scored {
 pub struct SemanticScores {
     scores: HashMap<i64, f64>,
     purpose: HashMap<(i64, i64), f32>,
+    /// The index's calibration, applied through fusion and confidence.
+    cal: Calibration,
 }
 
 fn pair_key(a: i64, b: i64) -> (i64, i64) {
@@ -159,6 +208,7 @@ impl SemanticScores {
         Some(SemanticScores {
             scores: evidence.into_iter().map(|e| (e.id, e.score)).collect(),
             purpose,
+            cal: index.calibration(),
         })
     }
 
@@ -168,17 +218,26 @@ impl SemanticScores {
             .into_iter()
             .map(|((a, b), s)| (pair_key(a, b), s))
             .collect();
-        SemanticScores { scores, purpose }
+        SemanticScores {
+            scores,
+            purpose,
+            cal: CALIBRATION,
+        }
     }
 
     fn normalized(&self, id: i64) -> Option<f64> {
         self.scores.get(&id).copied()
     }
 
+    /// Profile similarity of two leading candidates, if precomputed.
+    pub fn purpose(&self, a: i64, b: i64) -> Option<f32> {
+        self.purpose.get(&pair_key(a, b)).copied()
+    }
+
     fn same_purpose(&self, a: i64, b: i64) -> bool {
         self.purpose
             .get(&pair_key(a, b))
-            .is_some_and(|s| *s >= SAME_PURPOSE)
+            .is_some_and(|s| *s >= self.cal.same_purpose)
     }
 
     fn top_ids(&self, n: usize) -> Vec<i64> {
@@ -293,8 +352,8 @@ pub fn rank(
                 Some(s) => {
                     let lexical = lexical_score(&terms, doc, weights);
                     match s.normalized(doc.id) {
-                        Some(sem) => SEM_WEIGHT * sem + LEX_WEIGHT * lexical,
-                        None => UNINDEXED_FACTOR * lexical,
+                        Some(sem) => s.cal.sem_weight * sem + s.cal.lex_weight * lexical,
+                        None => s.cal.unindexed_factor * lexical,
                     }
                 }
                 None => lexical_score(&terms, doc, None),
@@ -331,16 +390,17 @@ fn judge(ranked: &[Scored], semantic: Option<&SemanticScores>) -> (Confidence, f
     match semantic {
         Some(sem) => {
             let interchangeable = second.is_some_and(|s| sem.same_purpose(top.id, s.id));
-            let confidence = if top.base >= SEM_STRONG
-                && (top.base - runner_up >= SEM_MARGIN || interchangeable)
+            let cal = &sem.cal;
+            let confidence = if top.base >= cal.strong
+                && (top.base - runner_up >= cal.margin || interchangeable)
             {
                 Confidence::Strong
-            } else if top.base >= SEM_CANDIDATE_MIN {
+            } else if top.base >= cal.candidate_min {
                 Confidence::Weak
             } else {
                 Confidence::None
             };
-            (confidence, SEM_CANDIDATE_MIN)
+            (confidence, cal.candidate_min)
         }
         None => {
             let confidence = if top.base >= STRONG_MATCH
@@ -355,6 +415,46 @@ fn judge(ranked: &[Scored], semantic: Option<&SemanticScores>) -> (Confidence, f
             (confidence, CANDIDATE_MIN)
         }
     }
+}
+
+/// Gathers candidates (full text plus semantic neighbours) and ranks them.
+fn candidates(
+    lib: &Library,
+    query: &str,
+    terms: &[String],
+    semantic: Option<&SemanticScores>,
+    now_ms: i64,
+) -> AppResult<(Vec<SearchDoc>, Vec<Scored>)> {
+    let mut ids: Vec<i64> = sparks::fts_candidates(lib, &fts_query(query), FTS_CANDIDATES)?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    if let Some(sem) = semantic {
+        let mut seen: HashSet<i64> = ids.iter().copied().collect();
+        for id in sem.top_ids(SEMANTIC_CANDIDATES) {
+            if seen.insert(id) {
+                ids.push(id);
+            }
+        }
+    }
+    let docs = sparks::search_docs(lib, &ids)?;
+    let weights = match semantic {
+        Some(_) => Some(term_weights(lib, terms)?),
+        None => None,
+    };
+    let ranked = rank(query, &docs, semantic, weights.as_ref(), now_ms);
+    Ok((docs, ranked))
+}
+
+/// The ranked candidates with their scores, for calibration and diagnostics
+/// (tests/semantic_tune.rs). Not used by the app.
+pub fn ranked_candidates(
+    lib: &Library,
+    query: &str,
+    semantic: Option<&SemanticScores>,
+) -> AppResult<Vec<Scored>> {
+    let terms = query_terms(query.trim());
+    Ok(candidates(lib, query.trim(), &terms, semantic, 0)?.1)
 }
 
 /// Runs retrieval against the library. `semantic` is `None` in standard mode,
@@ -375,25 +475,7 @@ pub fn search(
         ));
     }
 
-    let mut ids: Vec<i64> = sparks::fts_candidates(lib, &fts_query(query), FTS_CANDIDATES)?
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect();
-    if let Some(sem) = semantic {
-        let mut seen: HashSet<i64> = ids.iter().copied().collect();
-        for id in sem.top_ids(SEMANTIC_CANDIDATES) {
-            if seen.insert(id) {
-                ids.push(id);
-            }
-        }
-    }
-
-    let docs = sparks::search_docs(lib, &ids)?;
-    let weights = match semantic {
-        Some(_) => Some(term_weights(lib, &terms)?),
-        None => None,
-    };
-    let ranked = rank(query, &docs, semantic, weights.as_ref(), now_ms);
+    let (docs, ranked) = candidates(lib, query, &terms, semantic, now_ms)?;
     let by_id: HashMap<i64, &SearchDoc> = docs.iter().map(|d| (d.id, d)).collect();
 
     let summary_of = |s: &Scored| -> SparkSummary {
@@ -653,9 +735,11 @@ mod tests {
     #[test]
     fn weak_semantic_evidence_is_never_a_best_match() {
         let docs: Vec<SearchDoc> = (1..=3).map(|id| doc(id, &format!("Spark {id}"))).collect();
-        let sem = semantic(&[(1, 0.40), (2, 0.0), (3, 0.0)], &[]);
+        // Clearly ahead of the others, but below the Best Match bar.
+        let below = 0.9 * CALIBRATION.strong / CALIBRATION.sem_weight;
+        let sem = semantic(&[(1, below), (2, 0.0), (3, 0.0)], &[]);
         let ranked = rank("goal", &docs, Some(&sem), None, 0);
-        // 0.6 * 0.40 = 0.24 < SEM_STRONG.
+        assert!(ranked[0].base < CALIBRATION.strong);
         assert_eq!(judge(&ranked, Some(&sem)).0, Confidence::Weak);
         let sem = semantic(&[(1, 0.05), (2, 0.0), (3, 0.0)], &[]);
         let ranked = rank("goal", &docs, Some(&sem), None, 0);
