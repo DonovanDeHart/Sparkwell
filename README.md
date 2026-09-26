@@ -13,11 +13,11 @@ A **Spark** is a reusable expression of intent: a prompt, workflow, role definit
 - **Goal-first retrieval.** Type an outcome in plain language ("I need AI to help me build an MCP server"); Sparkwell returns one decisive **Best Match**, or honestly says there's no strong match and shows the closest Sparks.
 - **One-click copy.** *Copy Spark* puts the complete stored Spark on the clipboard. Unpinned, the panel then collapses so focus returns to the app you were using — ready for Ctrl+V.
 - **Favorites** for direct, one-click copying of the Sparks you use most.
-- **+ Add New Spark** — paste a Spark and save it. Title and summary are optional (derived from the text if left blank). With local AI available, *Smart Add* drafts a title, summary and tags you can edit before saving.
-- **Right-edge sidebar** on the monitor you're working on, respecting the taskbar and per-monitor scaling. Pin it to keep it on top; unpinned it collapses on Esc, click-away, or after copying.
+- **+ Add New Spark** — paste a Spark and save it. Title and summary are optional (derived from the text if left blank). With a small local model available, *Auto-fill details* drafts a title, summary and tags when you ask; you edit them before saving.
+- **Compact panel, docked top-right** on the monitor you're working on: as tall as its content, respecting the taskbar and per-monitor scaling, on frosted glass where Windows 11 supports it. It stays docked. Pin it to keep it on top; unpinned it collapses on Esc, click-away, or after copying.
 - **Your own global shortcut.** On first run Sparkwell asks you to press the shortcut you want (no single combination is free on every machine), validates it, and checks it isn't taken by another app. You can skip and set it later in Settings; the tray icon always opens Sparkwell. If a saved shortcut stops working (another app took it), Sparkwell tells you at startup instead of failing silently.
 - **Local-first.** The library is a single SQLite file on your device. No account, no cloud, no telemetry.
-- **Optional local intelligence.** If [Ollama](https://ollama.com) is running, retrieval becomes semantic (matching meaning, not just words) and Smart Add becomes available. Without it, everything still works with standard search.
+- **Optional local intelligence.** If [Ollama](https://ollama.com) is running, retrieval becomes semantic (matching meaning, not just words) and Auto-fill becomes available. Without it, everything still works with standard search, and results always say which kind of search found them.
 
 ## Keyboard
 
@@ -47,7 +47,7 @@ WebView2 is part of Windows 11; the installer fetches it automatically on system
    ```powershell
    ollama pull nomic-embed-text
    ```
-3. Optionally pull a small chat model for Smart Add (any installed chat model works; these are preferred):
+3. Optionally pull a small chat model for Auto-fill in Add New Spark. Only small models (up to about 8 B parameters) are used, so drafting takes seconds and doesn't push the embedding model out of memory:
    ```powershell
    ollama pull qwen2.5:3b     # or: ollama pull llama3.2
    ```
@@ -57,7 +57,7 @@ Sparkwell detects Ollama automatically (it checks in the background and whenever
 | Ollama | What you get |
 | --- | --- |
 | Running with an embedding model | Semantic + lexical hybrid retrieval ("Matched by local intelligence") |
-| Running with a chat model | Smart Add metadata drafting |
+| Running with a small chat model | Auto-fill drafts a title, summary and tags on request |
 | Stopped, missing, or busy | Standard search (title, tags, summary, full text); Favorites, Add, Copy, Settings all work |
 
 Sparkwell only talks to `127.0.0.1:11434`, bypasses any proxy, and never uses Ollama "cloud" models, so Spark content does not leave your device.
@@ -65,7 +65,8 @@ Sparkwell only talks to `127.0.0.1:11434`, bypasses any proxy, and never uses Ol
 ## Your library
 
 - Default location: `%LOCALAPPDATA%\Sparkwell\Library\sparkwell.db` (a single SQLite file).
-- Preferences: `%LOCALAPPDATA%\Sparkwell\config.json` (hotkey, pin state, custom library location).
+- Preferences: `%LOCALAPPDATA%\Sparkwell\config.json` (shortcut, pin state, custom library location).
+- `sparkwell.db` is complete on its own after Sparkwell quits (the write-ahead log is folded back in), so copying that one file copies the library.
 - Logs (no Spark content): `%LOCALAPPDATA%\com.sparkwell.app\logs\`.
 - **Change location** in Settings → Library Location. Sparkwell copies the library to the new folder, verifies the copy (integrity check and Spark count), and only then switches. The original file is left untouched as a backup. You can also point Sparkwell at a folder that already contains a Sparkwell library.
 - Uninstalling Sparkwell never deletes your library.
@@ -94,8 +95,8 @@ npm test                                   # UI behaviour tests (Vitest + Testin
 cd src-tauri
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test                                 # core unit tests (storage, search, hotkey, AI parsing, ...)
-cargo test --test semantic_live -- --ignored --nocapture   # optional: live retrieval-quality harness (needs Ollama)
+cargo test                                 # core unit tests + recorded semantic regression suite
+cargo test --test semantic_live semantic_retrieval_quality -- --ignored --nocapture   # optional: same suite on a live Ollama
 ```
 
 `cargo test` needs the frontend built once (`npm run build`) because the app embeds `dist/`.
@@ -113,7 +114,7 @@ Artifacts:
 - MSI: `src-tauri\target\release\bundle\msi\Sparkwell_0.1.0_x64_en-US.msi`
 - Executable: `src-tauri\target\release\sparkwell.exe`
 
-`scripts/windows-smoke.ps1` installs the built NSIS package and verifies the real app end to end (docking, single instance, global hotkey, restart persistence, uninstall keeps the library). CI runs it on `windows-latest` for every pull request.
+`scripts/windows-smoke.ps1` installs the built NSIS package and verifies the real app end to end (first run, docking, single instance, global shortcut, restart persistence, clean quit, quiet `--hidden` start, uninstall keeps the library). CI runs it on `windows-latest` for every pull request. It installs over and uninstalls any existing Sparkwell, so run it on a clean machine.
 
 ## Repository layout
 
@@ -136,7 +137,7 @@ src-tauri/               Rust core (Tauri 2)
   src/commands.rs        the typed command surface exposed to the UI
   migrations/            SQL migrations
   capabilities/          minimal Tauri permissions
-  tests/                 live semantic retrieval harness (opt-in)
+  tests/                 window config, semantic regression (recorded vectors) and live suites
 tests/                   UI tests
 scripts/                 Windows smoke test
 docs/                    architecture and testing notes

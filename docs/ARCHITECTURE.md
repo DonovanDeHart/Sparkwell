@@ -39,11 +39,12 @@ This document records how the MVP is built and why, as a companion to the three 
 
 ## Window behaviour
 
-- **Form factor.** One frameless, transparent, non-resizable window (`tauri.conf.json`). The panel is drawn by CSS inside an 8 px transparent gutter so it has rounded corners and a soft shadow on any Windows version. Native acrylic was not used: it fills the whole rectangle (square corners under a rounded panel) and is known to lag while the window moves.
-- **Docking.** On show, `platform::target_work_area` picks the monitor of the *foreground window* (where the user was working when they pressed the hotkey), falling back to the cursor's monitor, and uses `GetMonitorInfoW().rcWork` so the taskbar is respected. Width is 436 logical px (clamped to 392 px on small logical screens, never more than 30% of the work area); height is the full work area. Size is applied, the window moved, and the size re-applied so moving between monitors with different DPI lands correctly.
-- **Toggle semantics.** Hidden → show and focus the goal input (text selected, last query kept). Visible but unfocused → focus. Visible and focused → hide. The tray icon toggles too, ignoring the click that caused a click-away hide.
+- **Form factor.** One frameless, non-resizable window that *is* the panel (`tauri.conf.json`). Windows 11 draws its rounded corners, 1 px border and drop shadow (`shadow: true`). On Windows 11 22H2 and later, with Windows transparency effects on, the panel sits on a DWM acrylic backdrop behind a dark tint (frosted glass); otherwise it is painted opaque, so desktop content never shows through sharply (`window::apply_material`, `AppSnapshot::glass`). On Windows 10 the native shadow is turned off (it would draw a white border).
+- **Docking.** On show, `platform::target_work_area` picks the monitor of the *foreground window* (where the user was working when they pressed the hotkey), falling back to the cursor's monitor, and uses `GetMonitorInfoW().rcWork` so the taskbar is respected. `platform::dock_rect` places the panel top-right with an 8 px gap, like a Windows flyout: 436 logical px wide (392 px on small logical screens, never more than 30% of the work area) and as tall as its content within 700–900 logical px, never beyond the work area. The UI measures its content and reports it (`set_panel_height`); the window resizes in place, keeping its top edge, and overlays get the full height. The window rectangle includes invisible resize borders, so placement targets the client area. Size is applied, the window moved, and both re-applied so moving between monitors with different DPI lands correctly.
+- **Docked, not draggable.** The header is not a drag region and the webview has no `start-dragging` permission.
+- **Toggle semantics.** Hidden → show and focus the goal input (text selected, last query kept), or the open overlay if there is one. Visible but unfocused → focus. Visible and focused → hide. The tray icon toggles too, ignoring the click that caused a click-away hide.
 - **Pin.** Pinned: always on top and never auto-hides. Unpinned: collapses on Esc, click-away (after a 400 ms show grace period and a 140 ms re-check, and never while a native folder dialog is open) and 650 ms after a successful copy, which hands focus back to the previous app for an immediate paste.
-- **Lifecycle.** Single instance (a second launch reveals the first), close = hide, tray has Show/Hide and Quit, launch-at-startup uses the official autostart plugin with `--hidden` so login starts quietly.
+- **Lifecycle.** Single instance (a second launch reveals the first; `--quit` asks it to quit cleanly), close = hide, tray has Show/Hide and Quit. Launch-at-startup uses the official autostart plugin with `--hidden`. The window is created unfocused (`focus: false`), so a `--hidden` start never takes keyboard focus; only an explicit show (hotkey, tray, relaunch) focuses it.
 
 ## Activation hotkey
 
@@ -55,6 +56,8 @@ This document records how the MVP is built and why, as a companion to the three 
 - Escape, Tab, Delete, Backspace, lock and PrintScreen keys are refused, as are shortcuts Windows reserves (`Alt+F4`, `Win+Shift+S`, `Win+arrows`, …).
 
 `hotkey::change` follows the spec's order: unregister the old shortcut, register the new one, and persist only after the OS accepts it. If registration fails (owned by another app), the previous shortcut is re-registered and the UI shows a conflict message. While recording, the current shortcut is temporarily released so pressing it can be captured. Hiding the window always re-registers it.
+
+There is **no default shortcut**: no single combination is free on every machine. On first run (`config.json` has no `onboarded` flag yet) a welcome asks the user to press one, using the same validation and conflict check; "Skip for now" leaves Sparkwell usable from the tray icon and Settings shows "Not set". Configs written before this existed keep their shortcut and skip the welcome. At startup a saved shortcut that fails to register is never swapped for a guess: `hotkey::initial_status` records the error, the panel shows a notice with "Choose a shortcut" (on a `--hidden` start it is shown without taking focus), and the tray tooltip says the shortcut is unavailable.
 
 ## Data model
 
@@ -68,7 +71,9 @@ This document records how the MVP is built and why, as a companion to the three 
 
 Rules: **Copy always reads the full `body` from the database**; the summary is never a substitute. Editing a Spark deletes its embeddings (for every model) in the same transaction, and the indexer re-embeds it. The indexer also re-checks the content hash before storing, so a vector computed from stale text is never saved.
 
-Preferences that must be known *before* the library opens (library location, activation hotkey, pin) live in `%LOCALAPPDATA%\Sparkwell\config.json`, written atomically (temp file and rename). A corrupt file is backed up and replaced by defaults, so preferences can never stop Sparkwell from launching. Launch-at-startup is read from the OS registration rather than stored.
+Preferences that must be known *before* the library opens (library location, activation hotkey, pin, whether the first-run welcome is done) live in `%LOCALAPPDATA%\Sparkwell\config.json`, written atomically (temp file and rename). A corrupt file is backed up and replaced by defaults, so preferences can never stop Sparkwell from launching. Launch-at-startup is read from the OS registration rather than stored.
+
+The library runs in WAL mode. Every write is followed by a passive checkpoint, and quitting (tray, Settings, `--quit`) runs a `TRUNCATE` checkpoint and closes the connection, so `sparkwell.db` is complete on its own: copying just that file copies the library.
 
 ## Library location and safety
 
@@ -81,31 +86,36 @@ Preferences that must be known *before* the library opens (library location, act
 
 1. **Normalise the goal.** Tokenise, fold accents, strip conversational filler ("I need AI to help me…"), and lightly stem so "servers" meets "server" and "debugging" meets "debug".
 2. **Candidates.** Take the top 50 FTS5 hits (bm25 with title > tags > summary > body weights), plus the top 20 semantic neighbours when semantic evidence exists.
-3. **Lexical score** (0–1): field-weighted coverage of the goal's terms (title 1.0, tags 0.85, summary 0.55, body 0.25), blended 80/20 with how much of the Spark's title the goal covers.
-4. **Semantic score** (0–1): cosine similarity measured as a **z-score against the library's own similarity distribution for this query**, mapped from z = 0.5 → 0 to z = 2.0 → 1. This makes the signal independent of each embedding model's absolute cosine range. It requires at least 5 indexed Sparks; below that, standard retrieval is used.
-5. **Fusion:** `max(0.6·semantic + 0.4·lexical, 0.85·lexical)`, so strong word evidence is never penalised. An exact title match is floored at 0.95. Favorite, usage and recency add at most 0.045 and serve only as tie-breakers. Ties are broken deterministically.
-6. **Confidence:**
-   - A **Best Match** needs a fused score ≥ 0.42 *and* a lead of at least 0.10 over the runner-up, unless the score is decisive (≥ 0.8).
-   - A near-tie between two different Sparks is shown honestly as "No strong match" with the closest Sparks listed.
+3. **Lexical score** (0–1): field-weighted coverage of the goal's terms (title 1.0, tags 0.85, summary 0.55, body 0.25), each term weighted by its rarity in the library (IDF), blended 80/20 with how much of the Spark's title the goal covers.
+4. **Retrieval profiles** (`search::profile`). Each Spark is embedded as several views: a compact *profile* (title, summary, the Purpose/Needs it states, tags, and the topics its sections cover) and up to four passages spread across the body, each prefixed with the Spark's identity. A long, detailed Spark is therefore compared on what it is for, not diluted by its length, and a short one is not favoured just for being short.
+5. **Semantic score** (`search::vectors`). Similarity to a Spark is a soft maximum over its views (0.75 × best + 0.25 × second, profile weighted 1.05). Two model-independent corrections come from a fixed pool of 40 generic, unrelated goals embedded with the same model: a Spark's *hub level* (its mean similarity to the 10 generic goals it is closest to) is subtracted, so Sparks written in generic "AI assistant" language don't match everything; and the result is scaled by the typical spread of similarities for that model (clamped 0.15–0.6), so thresholds carry across embedding models. Queries and documents get the prefixes each model family was trained with (`ai::models`: qwen3-embedding instructions, nomic `search_query:` / `search_document:`, e5 `query:` / `passage:`, …). At least 5 indexed Sparks are needed; below that, standard retrieval is used.
+6. **Fusion:** 0.6 × semantic + 0.4 × lexical (Sparks not yet indexed use 0.85 × lexical). An exact title match is floored at 0.95. Favorite, usage and recency only break ties.
+7. **Confidence.** "No strong match" is always preferred to a wrong answer:
+   - With semantic evidence, a **Best Match** needs a fused score ≥ 0.30 and a lead of at least 0.12 over the runner-up, unless the two leaders state essentially the same purpose (profile similarity ≥ 0.85), which is a tie between equivalent Sparks rather than ambiguity. Candidates below 0.10 are not shown.
+   - Standard retrieval keeps its calibrated rule (≥ 0.42 with a 0.10 lead, or ≥ 0.8).
    - Scores are never shown as percentages; the UI uses qualitative states only (spec §4 ranking guidance).
+8. **Never silent.** Every standard result says so and why (offline, no embedding model, still indexing, didn't answer in time, unavailable). Semantic results say "Matched by local intelligence".
 
-The thresholds were calibrated against live `nomic-embed-text` runs (`src-tauri/tests/semantic_live.rs`). The expected Spark was visible for 9/9 intent phrasings with little or no word overlap, with 7/9 confident Best Matches, no confidently wrong answer, and no false confidence on unrelated goals.
+Changing the profile format (`PROFILE_VERSION`) or model changes each Spark's content hash, so the indexer re-embeds in the background.
+
+**Evaluation.** `src-tauri/tests/support` holds the 12 goals from the physical acceptance test (each with its expected Spark and acceptable alternatives), 36 further paraphrases, and 6 unrelated goals, run against the 17-Spark acceptance library (`tests/fixtures/acceptance_library.json`). Results are graded Correct / Acceptable / Missed / Confidently wrong. `semantic_regression.rs` replays recorded `qwen3-embedding:0.6b` vectors in CI; `semantic_live.rs` (opt-in) runs the same suite against a live Ollama and can re-record the fixture.
 
 The vector index is an in-memory map of normalised `f32` vectors. A linear scan over a few thousand Sparks takes well under a millisecond, so no vector database is needed (spec §4.4).
 
 ## Local intelligence (Ollama)
 
-- `ai::spawn_service` runs a background loop that never delays startup. It probes `GET /api/tags` with a 1.5 s timeout (every 15 s while offline, 60 s while online, and immediately when the panel opens or Sparks change), picks models, loads stored vectors, and embeds any Spark lacking a vector for the current model (`POST /api/embed`, batches of 8). Progress appears in the footer.
-- **Model policy:** a preference list per role (`nomic-embed-text`, `mxbai-embed-large`, … for embeddings; `qwen2.5`, `llama3.2`, … for chat), falling back to any installed local model. Models reported as remote/cloud (`remote_host` / `remote_model`, or a `-cloud` / `:cloud` tag) are never selected. `SPARKWELL_EMBED_MODEL` and `SPARKWELL_CHAT_MODEL` override the choice. Task prefixes are applied for models trained with them (for example `search_query:` / `search_document:` for nomic).
-- **Query embeddings** have a 3 s budget. Showing the panel pre-warms the embedding model so the first search is fast. Any failure (timeout, missing model, stopped server, malformed response) silently falls back to standard search and schedules a re-probe.
-- **Smart Add** uses `POST /api/chat` with a JSON schema. The Spark body is wrapped as data with explicit instructions not to follow it. Output is parsed defensively (clipped, tags normalised) and only fills the editor; nothing is saved without the user pressing Save.
+- `ai::spawn_service` runs a background loop that never delays startup. It probes `GET /api/tags` with a 1.5 s timeout (every 15 s while offline, 60 s while online, and immediately when the panel opens or Sparks change), picks models, loads stored vectors, and embeds any Spark whose views changed (`POST /api/embed`, batches of up to 16 texts, never splitting a Spark). Progress appears in the footer.
+- **Embedding model policy:** a preference list (`nomic-embed-text`, `mxbai-embed-large`, `snowflake-arctic-embed2`, `bge-m3`, `embeddinggemma`, `qwen3-embedding`, …), falling back to any installed local embedding model. Models reported as remote/cloud are never selected. `SPARKWELL_EMBED_MODEL` overrides the choice.
+- **Query embeddings** get 5 s while the model is known to be loaded and 25 s when it may be cold; showing the panel pre-warms it (kept loaded for 30 min). After 1.2 s the pending state reads "Waking up local intelligence…" and the rest of the panel stays usable. A timeout or failure falls back to standard search **with a label saying why**, and schedules a re-probe.
+- **Smart Add (Auto-fill)** runs only when the user presses "Auto-fill details"; pasting never starts it. It uses `POST /api/chat` with a JSON schema, and only a *small* local model (≤ 8.5 B parameters or ≤ 6 GiB, preferring `qwen2.5`, `llama3.2`, `qwen3`, `gemma3`, `phi4-mini`, …), so it answers in seconds and doesn't push the embedding model out of memory; the chat model is kept loaded for only 2 min and the embedding model is re-warmed afterwards. `SPARKWELL_CHAT_MODEL` overrides the choice. When it can't run, the editor says why (offline, or no small model, with a one-line `ollama pull` suggestion). The Spark body is wrapped as data with explicit instructions not to follow it. Output is parsed defensively (clipped, tags normalised to the library's Title Case) and only fills the editor; nothing is saved without the user pressing Save.
 - **Privacy:** the client is hard-wired to `http://127.0.0.1:11434`, uses no proxy, and makes no other network calls. There is no telemetry anywhere in the app.
 
 ## UI
 
 - React 19 with hand-written CSS on design tokens (`src/styles/tokens.css`). There is no component library, so the Fire & Ice identity stays deliberate: ice (cyan) for focus, retrieval and trust; fire (amber) for Sparks, copy, creation and favorites.
 - One stable shell with no page navigation: header → goal input → result region → Favorites → sticky Add New Spark → Local Only footer. Add/Edit and Settings are in-panel drawers.
-- Retrieval runs on Enter (never per keystroke). A pending skeleton appears only if retrieval takes more than 140 ms, so instant local searches never flash a loading state. Stale responses are discarded by request id.
+- Retrieval runs on Enter (never per keystroke). Enter again on the same goal copies the Best Match; `Ctrl+Enter` also copies, but another app can own it globally, so the hint names Enter. A pending skeleton appears only if retrieval takes more than 140 ms, so instant local searches never flash a loading state. Stale responses are discarded by request id.
+- Text fields never offer browser autofill: WebView2 general autofill is off for the window (`generalAutofillEnabled: false`) and every field sets `autocomplete="off"`.
 - Accessibility:
   - Every control is keyboard reachable with visible focus rings.
   - Icon buttons have accessible names and tooltips.
