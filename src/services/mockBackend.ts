@@ -6,6 +6,7 @@
 import type {
   AiStatus,
   AppSnapshot,
+  Fallback,
   HotkeyStatus,
   LibraryInfo,
   SearchOutcome,
@@ -195,6 +196,8 @@ export interface MockControl {
   setLibraryAvailable(available: boolean, error?: string): void;
   /** Accelerators "owned by another app". */
   takenHotkeys: Set<string>;
+  /** Forces standard search with this reason (null: decide from AI status). */
+  searchFallback: Fallback | null;
   lastClipboard: string | null;
   calls: Array<{ cmd: string; args?: Record<string, unknown> }>;
   reset(options?: { empty?: boolean }): void;
@@ -216,7 +219,7 @@ export function createMockBackend() {
     available: true,
     error: null,
   };
-  let ai: AiStatus = { state: 'offline', embedModel: null, chatModel: null, indexed: 0, total: 0, indexing: false };
+  let ai: AiStatus = { state: 'offline', embedModel: null, chatModel: null, chatModelsTooLarge: false, indexed: 0, total: 0, indexing: false };
 
   const emit = (event: string, payload: unknown) => listeners.get(event)?.forEach((h) => h(payload));
   const summary = (s: MockSpark): SparkSummary => ({
@@ -374,14 +377,26 @@ export function createMockBackend() {
         .filter((r) => r.score > 0)
         .sort((a, b) => b.score - a.score || a.s.id - b.s.id);
       const top = ranked[0];
-      const semantic = ai.state === 'online' && ai.embedModel !== null;
+      const semantic = control.searchFallback === null && ai.state === 'online' && ai.embedModel !== null;
+      const fallback: Fallback | null = semantic
+        ? null
+        : (control.searchFallback ?? (ai.state !== 'online' ? 'offline' : ai.embedModel ? 'indexing' : 'noEmbeddingModel'));
       if (top && top.score >= 0.42) {
-        return { query: q, mode: semantic ? 'semantic' : 'standard', confidence: 'strong', best: summary(top.s), alternatives: [], partiallyIndexed: false };
+        return {
+          query: q,
+          mode: semantic ? 'semantic' : 'standard',
+          fallback,
+          confidence: 'strong',
+          best: summary(top.s),
+          alternatives: [],
+          partiallyIndexed: false,
+        };
       }
       const alts = ranked.filter((r) => r.score >= 0.1).slice(0, 3).map((r) => summary(r.s));
       return {
         query: q,
         mode: semantic ? 'semantic' : 'standard',
+        fallback,
         confidence: alts.length ? 'weak' : 'none',
         best: null,
         alternatives: alts,
@@ -476,6 +491,7 @@ export function createMockBackend() {
       library = { ...library, available, error: available ? null : (error ?? 'The library could not be opened.') };
     },
     takenHotkeys: new Set(['Ctrl+Alt+K']),
+    searchFallback: null,
     lastClipboard: null,
     calls: [],
     reset(options) {
@@ -484,9 +500,10 @@ export function createMockBackend() {
       pinned = false;
       launchAtStartup = false;
       hotkey = { accelerator: 'Ctrl+Alt+Space', registered: true, error: null };
-      ai = { state: 'offline', embedModel: null, chatModel: null, indexed: 0, total: 0, indexing: false };
+      ai = { state: 'offline', embedModel: null, chatModel: null, chatModelsTooLarge: false, indexed: 0, total: 0, indexing: false };
       failures.clear();
       delays.clear();
+      control.searchFallback = null;
       control.lastClipboard = null;
       control.calls = [];
       this.setLibraryAvailable(true);

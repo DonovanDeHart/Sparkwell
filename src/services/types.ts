@@ -28,11 +28,15 @@ export interface SparkInput {
 }
 
 export type SearchMode = 'semantic' | 'standard';
+/** Why a search used standard retrieval instead of local intelligence. */
+export type Fallback = 'offline' | 'noEmbeddingModel' | 'indexing' | 'timedOut' | 'failed';
 export type Confidence = 'strong' | 'weak' | 'none';
 
 export interface SearchOutcome {
   query: string;
   mode: SearchMode;
+  /** Set for standard results, so the mode never changes silently. */
+  fallback: Fallback | null;
   confidence: Confidence;
   best: SparkSummary | null;
   alternatives: SparkSummary[];
@@ -44,7 +48,10 @@ export type AiState = 'checking' | 'online' | 'offline';
 export interface AiStatus {
   state: AiState;
   embedModel: string | null;
+  /** Small local chat model used by Auto-fill; null when unavailable. */
   chatModel: string | null;
+  /** Local chat models exist but all are too large for quick drafting. */
+  chatModelsTooLarge: boolean;
   indexed: number;
   total: number;
   indexing: boolean;

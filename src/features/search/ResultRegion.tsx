@@ -1,5 +1,5 @@
 import { Icon } from '../../components/Icon';
-import type { AiStatus, SearchOutcome, SparkSummary } from '../../services/types';
+import { semanticReady, type AiStatus, type Fallback, type SearchOutcome, type SparkSummary } from '../../services/types';
 import { SparkRow } from '../sparks/SparkRow';
 import { BestMatchCard } from './BestMatchCard';
 import type { SearchState } from '../../app/useSearch';
@@ -7,6 +7,8 @@ import type { SearchState } from '../../app/useSearch';
 interface ResultRegionProps {
   state: SearchState;
   pendingVisible: boolean;
+  /** The search is taking long enough that local intelligence is probably loading. */
+  slow: boolean;
   ai: AiStatus;
   copiedId: number | null;
   onCopy: (spark: SparkSummary) => void;
@@ -16,7 +18,16 @@ interface ResultRegionProps {
   onAdd: () => void;
 }
 
-function ModeLine({ outcome, ai }: { outcome: SearchOutcome; ai: AiStatus }) {
+const FALLBACK_TEXT: Record<Fallback, string> = {
+  offline: 'Standard search · local intelligence offline',
+  noEmbeddingModel: 'Standard search · no local embedding model installed',
+  indexing: 'Standard search · local intelligence is still indexing',
+  timedOut: "Standard search · local intelligence didn't answer in time",
+  failed: 'Standard search · local intelligence unavailable',
+};
+
+/** Every result says which retrieval produced it; the mode never changes silently. */
+function ModeLine({ outcome }: { outcome: SearchOutcome }) {
   if (outcome.mode === 'semantic') {
     return (
       <p className="result-mode is-semantic">
@@ -25,19 +36,15 @@ function ModeLine({ outcome, ai }: { outcome: SearchOutcome; ai: AiStatus }) {
       </p>
     );
   }
-  // Only mention intelligence when it's relevant: Ollama was expected but is offline.
-  if (ai.state === 'offline') {
-    return <p className="result-mode">Local intelligence offline · standard search active</p>;
-  }
-  return null;
+  return <p className="result-mode">{FALLBACK_TEXT[outcome.fallback ?? 'offline']}</p>;
 }
 
-function Pending() {
+function Pending({ waking }: { waking: boolean }) {
   return (
     <div className="match is-pending" aria-busy="true">
       <p className="pending-line">
         <span className="spinner" aria-hidden="true" />
-        Finding your Spark…
+        {waking ? 'Waking up local intelligence… the first search can take a few seconds' : 'Finding your Spark…'}
       </p>
       <div className="skeleton is-title" />
       <div className="skeleton is-line" />
@@ -100,7 +107,7 @@ function NoMatch({
 /** Everything between the goal input and Favorites. Keeps the shell stable:
  *  searching, results, and misses all render in this one region. */
 export function ResultRegion(props: ResultRegionProps) {
-  const { state, pendingVisible, ai, copiedId, onCopy, onToggleFavorite, onEdit, onDelete, onAdd } = props;
+  const { state, pendingVisible, slow, ai, copiedId, onCopy, onToggleFavorite, onEdit, onDelete, onAdd } = props;
 
   if (state.status === 'idle') return null;
 
@@ -121,10 +128,10 @@ export function ResultRegion(props: ResultRegionProps) {
   return (
     <section className="result-region" aria-live="polite" aria-label="Best Match">
       {showPending ? (
-        pendingVisible ? <Pending /> : null
+        pendingVisible ? <Pending waking={slow && semanticReady(ai)} /> : null
       ) : outcome ? (
         <div style={{ opacity: state.status === 'searching' ? 0.6 : 1, transition: 'opacity 120ms' }}>
-          <ModeLine outcome={outcome} ai={ai} />
+          <ModeLine outcome={outcome} />
           {outcome.best ? (
             <BestMatchCard
               key={outcome.best.id}

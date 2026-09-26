@@ -16,7 +16,15 @@ import { useSnapshot } from './useSnapshot';
 
 type Overlay = { kind: 'settings' } | EditorMode | null;
 
-const OFFLINE_AI: AiStatus = { state: 'checking', embedModel: null, chatModel: null, indexed: 0, total: 0, indexing: false };
+const OFFLINE_AI: AiStatus = {
+  state: 'checking',
+  embedModel: null,
+  chatModel: null,
+  chatModelsTooLarge: false,
+  indexed: 0,
+  total: 0,
+  indexing: false,
+};
 
 /** After a successful copy an unpinned panel collapses back into its bay,
  *  returning focus to the app the user was working in (ready for Ctrl+V). */
@@ -321,6 +329,7 @@ export function App() {
                 <ResultRegion
                   state={search.state}
                   pendingVisible={search.pendingVisible}
+                  slow={search.slow}
                   ai={ai}
                   copiedId={copiedId}
                   onCopy={(s) => void copy(s)}

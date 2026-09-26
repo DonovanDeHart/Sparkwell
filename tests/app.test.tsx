@@ -50,8 +50,8 @@ describe('Sparkwell sidebar', () => {
     const card = await screen.findByRole('article');
     expect(within(card).getByText('Best Match')).toBeInTheDocument();
     expect(within(card).getByText('MCP Server Architect')).toBeInTheDocument();
-    // Standard search is labelled only because local intelligence is offline.
-    expect(screen.getByText(/Local intelligence offline · standard search active/)).toBeInTheDocument();
+    // Standard search always says so, and why.
+    expect(screen.getByText('Standard search · local intelligence offline')).toBeInTheDocument();
 
     await user.click(within(card).getByRole('button', { name: /Copy Spark/ }));
     await within(card).findByText('Copied');
@@ -110,7 +110,32 @@ describe('Sparkwell sidebar', () => {
     act(() => mock.setAi({ state: 'online', embedModel: 'nomic-embed-text', chatModel: null }));
     await searchFor(user, 'build an mcp server');
     expect(await screen.findByText(/Matched by local intelligence/)).toBeInTheDocument();
-    expect(screen.queryByText(/standard search active/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Standard search/)).not.toBeInTheDocument();
+  });
+
+  it('never switches to standard search silently', async () => {
+    const user = await renderApp();
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:0.6b', chatModel: null }));
+    mock.searchFallback = 'timedOut';
+    await searchFor(user, 'build an mcp server');
+    expect(await screen.findByText("Standard search · local intelligence didn't answer in time")).toBeInTheDocument();
+    expect(screen.queryByText(/Matched by local intelligence/)).not.toBeInTheDocument();
+
+    mock.searchFallback = 'indexing';
+    await searchFor(user, 'youtube script');
+    expect(await screen.findByText('Standard search · local intelligence is still indexing')).toBeInTheDocument();
+  });
+
+  it('shows a calm waking state while local intelligence loads its model', async () => {
+    const user = await renderApp();
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:0.6b', chatModel: null }));
+    mock.delay('search_sparks', 1700);
+    await searchFor(user, 'build an mcp server');
+    expect(await screen.findByText('Finding your Spark…')).toBeInTheDocument();
+    expect(await screen.findByText(/Waking up local intelligence/, {}, { timeout: 1500 })).toBeInTheDocument();
+    // The rest of the panel stays usable meanwhile.
+    expect(screen.getByRole('button', { name: 'Copy Codex Architecture Expert' })).toBeEnabled();
+    expect(await screen.findByRole('article', {}, { timeout: 2000 })).toBeInTheDocument();
   });
 
   it('clearing the goal returns to the idle state', async () => {
