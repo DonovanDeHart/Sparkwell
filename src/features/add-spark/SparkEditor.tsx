@@ -339,7 +339,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
               </label>
               <textarea
                 id="spark-summary"
-                className="textarea"
+                className="textarea is-autosize"
                 rows={2}
                 {...NO_AUTOFILL}
                 maxLength={600}

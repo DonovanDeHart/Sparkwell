@@ -302,6 +302,7 @@ export function createMockBackend() {
       platform: 'windows',
       pinned,
       onboarded,
+      glass: false,
       hotkey,
       launchAtStartup,
       library: libInfo(),
@@ -425,6 +426,7 @@ export function createMockBackend() {
       pinned = p as boolean;
       return pinned;
     },
+    set_panel_height: () => null,
     hide_panel: () => {
       emit('sparkwell://hidden', null);
       return null;

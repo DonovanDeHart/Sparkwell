@@ -33,6 +33,8 @@ pub struct AppSnapshot {
     pub pinned: bool,
     /// First-run welcome finished (shortcut chosen or skipped).
     pub onboarded: bool,
+    /// Frosted glass is on; otherwise the panel is painted opaque.
+    pub glass: bool,
     pub hotkey: HotkeyStatus,
     pub launch_at_startup: bool,
     pub library: LibraryInfo,
@@ -61,6 +63,10 @@ pub async fn get_app_snapshot<R: Runtime>(
         platform: std::env::consts::OS,
         pinned: state.is_pinned(),
         onboarded: state.config_snapshot().onboarded,
+        glass: state
+            .window
+            .glass
+            .load(std::sync::atomic::Ordering::Relaxed),
         hotkey: state
             .hotkey
             .lock()
@@ -205,6 +211,13 @@ pub async fn get_ai_status(state: State<'_, AppState>) -> AppResult<AiStatus> {
 #[tauri::command]
 pub async fn set_pinned<R: Runtime>(app: AppHandle<R>, pinned: bool) -> AppResult<bool> {
     window::set_pinned(&app, pinned)
+}
+
+/// The height the UI's content needs (logical px); the panel fits it.
+#[tauri::command]
+pub async fn set_panel_height<R: Runtime>(app: AppHandle<R>, height: f64) -> AppResult<()> {
+    window::set_content_height(&app, height);
+    Ok(())
 }
 
 #[tauri::command]

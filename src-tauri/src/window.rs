@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
-use crate::platform::{dock_rect, target_work_area};
+use crate::platform::{current_work_area, dock_rect, target_work_area, DockRect};
 use crate::state::AppState;
 
 pub const MAIN: &str = "main";
@@ -26,22 +26,94 @@ pub fn main_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
     app.get_webview_window(MAIN)
 }
 
-/// Snaps the window to the right edge of the target monitor's work area.
+fn content_height<R: Runtime>(app: &AppHandle<R>) -> f64 {
+    app.state::<AppState>()
+        .window
+        .content_height
+        .lock()
+        .map(|h| *h)
+        .unwrap_or(crate::platform::DEFAULT_HEIGHT)
+}
+
+/// Puts the panel's visible area on `rect`. With the native shadow the
+/// window rectangle also holds invisible resize borders around the client
+/// area, so the position is offset by them.
+fn place<R: Runtime>(window: &WebviewWindow<R>, rect: DockRect) {
+    let size = PhysicalSize::new(rect.width, rect.height);
+    let position = || {
+        let (dx, dy) = match (window.outer_position(), window.inner_position()) {
+            (Ok(outer), Ok(inner)) => (inner.x - outer.x, inner.y - outer.y),
+            _ => (0, 0),
+        };
+        PhysicalPosition::new(rect.x - dx, rect.y - dy)
+    };
+    // Size, move, then again: moving between monitors with different DPI
+    // makes Windows rescale the window (and its borders).
+    let _ = window.set_size(size);
+    let _ = window.set_position(position());
+    let _ = window.set_size(size);
+    let _ = window.set_position(position());
+}
+
+/// Snaps the panel to the top-right of the target monitor's work area.
 pub fn dock<R: Runtime>(window: &WebviewWindow<R>) {
     let Some(area) = target_work_area(window) else {
         log::warn!("no monitor work area available; showing without docking");
         return;
     };
-    let rect = dock_rect(&area);
+    let rect = dock_rect(&area, content_height(window.app_handle()));
     log::info!("docking to {area:?} -> {rect:?}");
-    let size = PhysicalSize::new(rect.width, rect.height);
-    let pos = PhysicalPosition::new(rect.x, rect.y);
-    // Size, move, then size again: moving between monitors with different DPI
-    // makes Windows rescale the window, so re-apply the physical size.
-    let _ = window.set_size(size);
-    let _ = window.set_position(pos);
-    let _ = window.set_size(size);
-    let _ = window.set_position(pos);
+    place(window, rect);
+}
+
+/// The UI reports how tall its content is; the panel fits it (within the
+/// compact range), resizing in place while visible.
+pub fn set_content_height<R: Runtime>(app: &AppHandle<R>, height: f64) {
+    if !height.is_finite() || height <= 0.0 {
+        return;
+    }
+    {
+        let state = app.state::<AppState>();
+        let Ok(mut current) = state.window.content_height.lock() else {
+            return;
+        };
+        if (*current - height).abs() < 1.0 {
+            return;
+        }
+        *current = height;
+    }
+    let Some(window) = main_window(app) else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    // Stay on the monitor it's on; only the height changes.
+    if let Some(area) = current_work_area(&window) {
+        place(&window, dock_rect(&area, height));
+    }
+}
+
+/// Frosted glass (a DWM acrylic backdrop behind the translucent panel) where
+/// Windows supports it; returns whether it applies, so the UI can paint an
+/// opaque panel otherwise. On Windows 11 the native shadow also gives the
+/// panel rounded corners; Windows 10 would draw a white border instead.
+pub fn apply_material<R: Runtime>(window: &WebviewWindow<R>) -> bool {
+    #[cfg(windows)]
+    {
+        use tauri::window::{Effect, EffectsBuilder};
+        if crate::platform::windows_build() < 22000 {
+            let _ = window.set_shadow(false);
+            return false;
+        }
+        if crate::platform::glass_supported() {
+            return window
+                .set_effects(EffectsBuilder::new().effect(Effect::Acrylic).build())
+                .is_ok();
+        }
+    }
+    let _ = window;
+    false
 }
 
 pub fn show<R: Runtime>(app: &AppHandle<R>) {

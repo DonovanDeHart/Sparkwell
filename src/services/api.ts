@@ -105,6 +105,7 @@ export const api = {
   getAiStatus: () => call<AiStatus>('get_ai_status'),
   setPinned: (pinned: boolean) => call<boolean>('set_pinned', { pinned }),
   hidePanel: () => call<void>('hide_panel'),
+  setPanelHeight: (height: number) => call<void>('set_panel_height', { height }),
   quitApp: () => call<void>('quit_app'),
   setHotkey: (accelerator: string) => call<HotkeyStatus>('set_hotkey', { accelerator }),
   finishOnboarding: () => call<boolean>('finish_onboarding'),

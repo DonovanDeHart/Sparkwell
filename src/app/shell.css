@@ -1,11 +1,9 @@
-/* The window is a transparent rectangle; the panel floats inside it with a
-   small gutter for its shadow so it reads as a companion layer on the desktop
-   edge rather than a web page in a box. */
+/* The window is the panel: Windows draws its rounded corners, border and
+   shadow, and (where supported) the frosted acrylic backdrop behind it. */
 
 .stage {
   position: fixed;
   inset: 0;
-  padding: 8px;
   display: flex;
 }
 
@@ -17,29 +15,34 @@
   min-width: 0;
   overflow: hidden;
   border-radius: var(--r-panel);
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  /* Opaque unless frosted glass is on (older Windows, transparency effects
+     turned off): desktop icons must never show through as ghosts. */
   background:
     radial-gradient(120% 38% at 0% 0%, rgba(84, 221, 235, 0.055), transparent 70%),
     radial-gradient(90% 30% at 100% 100%, rgba(243, 154, 61, 0.05), transparent 70%),
-    linear-gradient(180deg, rgba(19, 27, 36, 0.985) 0%, rgba(12, 18, 25, 0.99) 45%, rgba(9, 14, 20, 0.992) 100%);
-  box-shadow:
-    0 24px 60px -12px rgba(0, 0, 0, 0.65),
-    0 0 0 1px rgba(0, 0, 0, 0.55),
-    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    linear-gradient(180deg, #131b24 0%, #0c1219 45%, #090e14 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+/* Frosted glass: the Windows acrylic backdrop (blurred, never sharp) shows
+   through a dark tint. */
+:root[data-glass] .panel {
+  background:
+    radial-gradient(120% 38% at 0% 0%, rgba(84, 221, 235, 0.07), transparent 70%),
+    radial-gradient(90% 30% at 100% 100%, rgba(243, 154, 61, 0.06), transparent 70%),
+    linear-gradient(180deg, rgba(19, 27, 36, 0.74) 0%, rgba(12, 18, 25, 0.8) 45%, rgba(9, 14, 20, 0.84) 100%);
 }
 
 .panel.is-entering {
-  animation: panel-in 190ms var(--ease-out);
+  animation: panel-in 170ms var(--ease-out);
 }
 
 @keyframes panel-in {
   from {
     opacity: 0;
-    transform: translateX(14px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
@@ -269,9 +272,13 @@
 
 .toast-text {
   min-width: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  /* Up to two lines: long Spark titles stay readable. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .toast-action {

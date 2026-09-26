@@ -9,14 +9,14 @@ interface HeaderProps {
   onHide: () => void;
 }
 
-/** Quiet header: wordmark left, Pin / Settings / Hide right. Doubles as the
- *  window drag region. */
+/** Quiet header: wordmark left, Pin / Settings / Hide right. The panel stays
+ *  docked, so the header is not a drag handle. */
 export function Header({ pinned, settingsOpen, onTogglePin, onToggleSettings, onHide }: HeaderProps) {
   return (
-    <header className="header" data-tauri-drag-region>
-      <div className="brand" data-tauri-drag-region>
+    <header className="header">
+      <div className="brand">
         <LogoMark size={26} />
-        <span className="wordmark" data-tauri-drag-region>
+        <span className="wordmark">
           <span className="wordmark-spark">Spark</span>
           <span className="wordmark-well">Well</span>
         </span>

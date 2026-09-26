@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Icon } from '../../components/Icon';
 import { IconButton } from '../../components/IconButton';
+import { LogoMark } from '../../components/LogoMark';
 import { Menu } from '../../components/Menu';
 import type { SparkSummary } from '../../services/types';
 
@@ -34,16 +35,54 @@ export function BestMatchCard({ spark, copied, onCopy, onToggleFavorite, onEdit,
           <Icon name="star" size={14} strokeWidth={1.8} />
           Best Match
         </span>
-        <div className="match-top-actions">
-          <IconButton
-            small
-            fire
-            icon={spark.favorite ? 'starFilled' : 'star'}
-            label={spark.favorite ? 'Remove from Favorites' : 'Add to Favorites'}
-            active={spark.favorite}
-            aria-pressed={spark.favorite}
-            onClick={() => onToggleFavorite(spark)}
-          />
+        <span className="match-mark" aria-hidden="true">
+          <LogoMark size={22} />
+        </span>
+      </div>
+
+      <h2 className="match-title selectable" id={`match-title-${spark.id}`}>
+        {spark.title}
+      </h2>
+      {spark.summary && <p className="match-summary selectable">{spark.summary}</p>}
+
+      {shownTags.length > 0 && (
+        <div className="chips" aria-label="Tags">
+          {shownTags.map((tag) => (
+            <span key={tag} className="chip">
+              {tag}
+            </span>
+          ))}
+          {hiddenTags > 0 && <span className="chip is-more">+{hiddenTags}</span>}
+        </div>
+      )}
+
+      <div className="match-actions">
+        <button
+          type="button"
+          className={`button is-fire is-large copy-spark${copied ? ' is-done' : ''}`}
+          onClick={() => onCopy(spark)}
+          title="Copy the complete Spark (Ctrl+Enter)"
+        >
+          {copied ? (
+            <>
+              Copied <Icon name="check" size={18} strokeWidth={2} />
+            </>
+          ) : (
+            <>
+              Copy Spark <Icon name="clipboard" size={18} />
+            </>
+          )}
+        </button>
+        <IconButton
+          small
+          fire
+          icon={spark.favorite ? 'starFilled' : 'star'}
+          label={spark.favorite ? 'Remove from Favorites' : 'Add to Favorites'}
+          active={spark.favorite}
+          aria-pressed={spark.favorite}
+          onClick={() => onToggleFavorite(spark)}
+        />
+        <div className="match-more">
           <IconButton
             small
             icon="more"
@@ -53,7 +92,7 @@ export function BestMatchCard({ spark, copied, onCopy, onToggleFavorite, onEdit,
             onClick={() => setMenuOpen((o) => !o)}
           />
           {menuOpen && (
-            <Menu label="Spark actions" onClose={closeMenu} style={{ top: 32, right: 0 }}>
+            <Menu label="Spark actions" onClose={closeMenu} style={{ bottom: 34, right: 0 }}>
               <button
                 type="button"
                 role="menuitem"
@@ -84,39 +123,6 @@ export function BestMatchCard({ spark, copied, onCopy, onToggleFavorite, onEdit,
           )}
         </div>
       </div>
-
-      <h2 className="match-title selectable" id={`match-title-${spark.id}`}>
-        {spark.title}
-      </h2>
-      {spark.summary && <p className="match-summary selectable">{spark.summary}</p>}
-
-      {shownTags.length > 0 && (
-        <div className="chips" aria-label="Tags">
-          {shownTags.map((tag) => (
-            <span key={tag} className="chip">
-              {tag}
-            </span>
-          ))}
-          {hiddenTags > 0 && <span className="chip is-more">+{hiddenTags}</span>}
-        </div>
-      )}
-
-      <button
-        type="button"
-        className={`button is-fire is-large is-block copy-spark${copied ? ' is-done' : ''}`}
-        onClick={() => onCopy(spark)}
-        title="Copy the complete Spark (Ctrl+Enter)"
-      >
-        {copied ? (
-          <>
-            Copied <Icon name="check" size={18} strokeWidth={2} />
-          </>
-        ) : (
-          <>
-            Copy Spark <Icon name="clipboard" size={18} />
-          </>
-        )}
-      </button>
     </article>
   );
 }

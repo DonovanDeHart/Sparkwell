@@ -301,6 +301,13 @@
   display: block;
 }
 
+/* Grows with its content between a minimum and a maximum height. */
+.textarea.is-autosize {
+  field-sizing: content;
+  min-height: calc(2lh + 20px);
+  max-height: calc(8lh + 20px);
+}
+
 .input::placeholder,
 .textarea::placeholder {
   color: #66707d;

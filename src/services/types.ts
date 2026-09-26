@@ -85,6 +85,8 @@ export interface AppSnapshot {
   pinned: boolean;
   /** First-run welcome finished (shortcut chosen or skipped). */
   onboarded: boolean;
+  /** Frosted glass is on; otherwise the panel is painted opaque. */
+  glass: boolean;
   hotkey: HotkeyStatus;
   launchAtStartup: boolean;
   library: LibraryInfo;

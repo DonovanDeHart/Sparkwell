@@ -41,7 +41,7 @@
   --success: #7ee2b8;
 
   /* Shape */
-  --r-panel: 18px;
+  --r-panel: 8px; /* matches the Windows 11 window corner */
   --r-card: 16px;
   --r-field: 13px;
   --r-button: 11px;

@@ -72,6 +72,11 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(w) = window::main_window(app.handle()) {
         let _ = w.set_always_on_top(pinned);
+        let glass = window::apply_material(&w);
+        app.state::<AppState>()
+            .window
+            .glass
+            .store(glass, std::sync::atomic::Ordering::Relaxed);
     }
     let start_hidden = std::env::args().any(|a| a == HIDDEN_ARG);
     if !start_hidden {
@@ -176,6 +181,7 @@ pub fn run() {
             commands::get_ai_status,
             commands::set_pinned,
             commands::hide_panel,
+            commands::set_panel_height,
             commands::quit_app,
             commands::set_hotkey,
             commands::finish_onboarding,

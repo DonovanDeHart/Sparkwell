@@ -25,24 +25,156 @@ pub struct DockRect {
     pub height: u32,
 }
 
-/// Preferred and minimum sidebar widths in logical pixels (the panel itself is
-/// 16px narrower; the rest is the transparent shadow gutter).
+/// Preferred and minimum panel widths in logical pixels.
 pub const PREFERRED_WIDTH: f64 = 436.0;
 pub const MIN_WIDTH: f64 = 392.0;
+/// Gap between the panel and the work-area edges, like a Windows flyout.
+pub const EDGE_MARGIN: f64 = 8.0;
+/// The panel fits its content within this range (logical pixels), and never
+/// leaves the work area.
+pub const MIN_HEIGHT: f64 = 700.0;
+pub const MAX_HEIGHT: f64 = 900.0;
+/// Used until the UI has measured its content.
+pub const DEFAULT_HEIGHT: f64 = 760.0;
 
-/// Computes the right-edge dock rectangle for a work area.
-pub fn dock_rect(area: &WorkArea) -> DockRect {
-    let logical_work_width = area.width as f64 / area.scale;
+/// Computes the panel rectangle for a work area: right edge, top-anchored,
+/// as tall as its content (`content_height`, logical px) within
+/// [`MIN_HEIGHT`]..[`MAX_HEIGHT`].
+pub fn dock_rect(area: &WorkArea, content_height: f64) -> DockRect {
+    let scale = area.scale;
+    let margin = (EDGE_MARGIN * scale).round() as u32;
+    let fit = |extent: u32| extent.saturating_sub(2 * margin).max(1);
+
+    let logical_work_width = area.width as f64 / scale;
     // Stay a companion: never more than ~30% of a small screen, but never
     // narrower than the usable minimum.
-    let logical = (logical_work_width * 0.30).clamp(MIN_WIDTH, PREFERRED_WIDTH);
-    let width = ((logical * area.scale).round() as u32).min(area.width);
+    let logical_width = (logical_work_width * 0.30).clamp(MIN_WIDTH, PREFERRED_WIDTH);
+    let width = ((logical_width * scale).round() as u32).min(fit(area.width));
+    let logical_height = if content_height.is_finite() {
+        content_height.clamp(MIN_HEIGHT, MAX_HEIGHT)
+    } else {
+        DEFAULT_HEIGHT
+    };
+    let height = ((logical_height * scale).round() as u32).min(fit(area.height));
     DockRect {
-        x: area.x + area.width as i32 - width as i32,
-        y: area.y,
+        x: area.x + area.width as i32 - margin as i32 - width as i32,
+        y: area.y + margin as i32,
         width,
-        height: area.height,
+        height,
     }
+}
+
+/// The work area of the monitor the window is on (for resizing in place).
+pub fn current_work_area<R: Runtime>(window: &WebviewWindow<R>) -> Option<WorkArea> {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())?;
+    let area = monitor.work_area();
+    Some(WorkArea {
+        x: area.position.x,
+        y: area.position.y,
+        width: area.size.width.max(1),
+        height: area.size.height.max(1),
+        scale: monitor.scale_factor(),
+    })
+}
+
+/// Windows build number (0 elsewhere or if unknown).
+#[cfg(windows)]
+pub fn windows_build() -> u32 {
+    use windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    registry_string(
+        HKEY_LOCAL_MACHINE,
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        "CurrentBuildNumber",
+    )
+    .and_then(|b| b.trim().parse().ok())
+    .unwrap_or(0)
+}
+
+#[cfg(not(windows))]
+pub fn windows_build() -> u32 {
+    0
+}
+
+/// Frosted glass needs DWM system backdrops (Windows 11 22H2 and later), and
+/// is skipped when the user has turned off Windows transparency effects.
+#[cfg(windows)]
+pub fn glass_supported() -> bool {
+    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
+    let transparency = registry_dword(
+        HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        "EnableTransparency",
+    )
+    .unwrap_or(1);
+    windows_build() >= 22621 && transparency != 0
+}
+
+#[cfg(not(windows))]
+pub fn glass_supported() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn registry_dword(
+    root: windows_sys::Win32::System::Registry::HKEY,
+    key: &str,
+    value: &str,
+) -> Option<u32> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_DWORD};
+    let (key, value) = (wide(key), wide(value));
+    let mut data: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: valid NUL-terminated strings and an out-buffer of `size` bytes.
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut data as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    (status == 0).then_some(data)
+}
+
+#[cfg(windows)]
+fn registry_string(
+    root: windows_sys::Win32::System::Registry::HKEY,
+    key: &str,
+    value: &str,
+) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+    let (key, value) = (wide(key), wide(value));
+    let mut buf = [0u16; 64];
+    let mut size = std::mem::size_of_val(&buf) as u32;
+    // SAFETY: valid NUL-terminated strings and an out-buffer of `size` bytes.
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..len]))
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -145,80 +277,85 @@ fn fallback_work_area<R: Runtime>(window: &WebviewWindow<R>) -> Option<WorkArea>
 mod tests {
     use super::*;
 
+    fn area(x: i32, y: i32, width: u32, height: u32, scale: f64) -> WorkArea {
+        WorkArea {
+            x,
+            y,
+            width,
+            height,
+            scale,
+        }
+    }
+
     #[test]
-    fn docks_to_right_edge_at_100_percent() {
-        let r = dock_rect(&WorkArea {
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1040,
-            scale: 1.0,
-        });
+    fn docks_top_right_with_a_small_gap_at_100_percent() {
+        let r = dock_rect(&area(0, 0, 1920, 1040, 1.0), 780.0);
         assert_eq!(
             r,
             DockRect {
-                x: 1920 - 436,
-                y: 0,
+                x: 1920 - 8 - 436,
+                y: 8,
                 width: 436,
-                height: 1040
+                height: 780
             }
         );
+    }
+
+    #[test]
+    fn fits_content_within_the_compact_range() {
+        let a = area(0, 0, 3440, 1392, 1.0);
+        assert_eq!(dock_rect(&a, 520.0).height, 700, "short content");
+        assert_eq!(dock_rect(&a, 812.4).height, 812, "fits content");
+        assert_eq!(dock_rect(&a, 1600.0).height, 900, "long content scrolls");
+        assert_eq!(dock_rect(&a, f64::NAN).height, DEFAULT_HEIGHT as u32);
+        // Top-anchored: the top never moves as the height changes.
+        assert_eq!(dock_rect(&a, 520.0).y, dock_rect(&a, 1600.0).y);
+    }
+
+    #[test]
+    fn never_leaves_a_short_work_area() {
+        // 1366x768 laptop with the taskbar: 720 px of work area.
+        let r = dock_rect(&area(0, 0, 1366, 720, 1.0), 900.0);
+        assert_eq!(r.y, 8);
+        assert_eq!(r.height, 704);
+        assert!(r.y + r.height as i32 <= 720);
     }
 
     #[test]
     fn scales_with_dpi() {
         for scale in [1.25, 1.5, 2.0] {
             let width = (2560.0 * scale) as u32;
-            let r = dock_rect(&WorkArea {
-                x: 0,
-                y: 0,
-                width,
-                height: 1400,
-                scale,
-            });
+            let r = dock_rect(&area(0, 0, width, (1400.0 * scale) as u32, scale), 800.0);
             assert_eq!(r.width, (436.0 * scale).round() as u32, "scale {scale}");
-            assert_eq!(r.x + r.width as i32, width as i32);
+            assert_eq!(r.height, (800.0 * scale).round() as u32, "scale {scale}");
+            let margin = (8.0 * scale).round() as i32;
+            assert_eq!(r.x + r.width as i32, width as i32 - margin);
+            assert_eq!(r.y, margin);
         }
     }
 
     #[test]
     fn small_logical_screens_use_minimum_width() {
         // 1920x1080 at 200% = 960 logical px wide.
-        let r = dock_rect(&WorkArea {
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1032,
-            scale: 2.0,
-        });
+        let r = dock_rect(&area(0, 0, 1920, 1032, 2.0), 800.0);
         assert_eq!(r.width, (MIN_WIDTH * 2.0) as u32);
+        assert_eq!(r.height, 1032 - 32, "clamped to the work area");
     }
 
     #[test]
     fn secondary_monitor_offsets_and_taskbar_are_respected() {
         // Secondary monitor to the left of primary, taskbar at the top (y=40).
-        let r = dock_rect(&WorkArea {
-            x: -2560,
-            y: 40,
-            width: 2560,
-            height: 1400,
-            scale: 1.0,
-        });
-        assert_eq!(r.x, -436);
-        assert_eq!(r.y, 40);
-        assert_eq!(r.height, 1400);
+        let r = dock_rect(&area(-2560, 40, 2560, 1400, 1.0), 760.0);
+        assert_eq!(r.x, -8 - 436);
+        assert_eq!(r.y, 48);
+        assert_eq!(r.height, 760);
     }
 
     #[test]
     fn never_wider_than_the_work_area() {
-        let r = dock_rect(&WorkArea {
-            x: 0,
-            y: 0,
-            width: 300,
-            height: 600,
-            scale: 1.0,
-        });
-        assert_eq!(r.width, 300);
-        assert_eq!(r.x, 0);
+        let r = dock_rect(&area(0, 0, 300, 600, 1.0), 760.0);
+        assert_eq!(r.width, 284);
+        assert!(r.x >= 0 && r.x + r.width as i32 <= 300);
+        assert!(r.y + r.height as i32 <= 600);
     }
 }

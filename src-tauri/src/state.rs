@@ -1,7 +1,7 @@
 //! Process-wide state managed by Tauri.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::Instant;
 
@@ -21,6 +21,10 @@ pub struct LibrarySlot {
 }
 
 pub struct WindowFlags {
+    /// Height the UI's content needs, in logical pixels.
+    pub content_height: Mutex<f64>,
+    /// Frosted glass is on (otherwise the UI paints an opaque panel).
+    pub glass: AtomicBool,
     pub last_shown: Mutex<Instant>,
     pub last_autohide: Mutex<Option<Instant>>,
     /// While > 0 (e.g. a native folder dialog is open) blur must not hide.
@@ -69,6 +73,8 @@ impl AppState {
             ollama: OllamaClient::default(),
             hotkey: Mutex::new(hotkey),
             window: WindowFlags {
+                content_height: Mutex::new(crate::platform::DEFAULT_HEIGHT),
+                glass: AtomicBool::new(false),
                 last_shown: Mutex::new(Instant::now()),
                 last_autohide: Mutex::new(None),
                 suppress_autohide: AtomicU32::new(0),

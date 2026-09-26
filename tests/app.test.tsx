@@ -3,7 +3,7 @@
 
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { api } from '../src/services/api';
 import type { MockControl } from '../src/services/mockBackend';
@@ -189,6 +189,23 @@ describe('Sparkwell sidebar', () => {
     await waitFor(() => expect(screen.getByLabelText('What are you trying to accomplish?')).toHaveFocus());
   });
 
+  it('gives overlays the full panel height', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    try {
+      const user = await renderApp();
+      await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+      await waitFor(() => expect(calls('set_panel_height').at(-1)?.args).toEqual({ height: 900 }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('removing a favorite can be undone', async () => {
     const user = await renderApp();
     await user.click(screen.getByRole('button', { name: 'Remove Deep Research Framework from Favorites' }));
@@ -197,6 +214,7 @@ describe('Sparkwell sidebar', () => {
     await user.click(screen.getByRole('button', { name: 'Undo' }));
     expect(await screen.findByRole('button', { name: 'Copy Deep Research Framework' })).toBeInTheDocument();
   });
+
 });
 
 describe('Add New Spark', () => {

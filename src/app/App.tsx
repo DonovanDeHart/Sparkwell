@@ -31,6 +31,8 @@ const OFFLINE_AI: AiStatus = {
  *  returning focus to the app the user was working in (ready for Ctrl+V). */
 const COLLAPSE_AFTER_COPY_MS = 650;
 const COPIED_FEEDBACK_MS = 1800;
+/** The panel's maximum height (platform.rs MAX_HEIGHT): overlays get it all. */
+const FULL_HEIGHT = 900;
 
 /** Puts keyboard focus inside the top-most overlay (welcome, Settings, editor):
  *  on its `data-autofocus` control if it has one, else on the overlay itself.
@@ -54,6 +56,9 @@ export function App() {
   const [entering, setEntering] = useState(true);
   const [hotkeyNoticeDismissed, setHotkeyNoticeDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const copiedTimer = useRef<number | undefined>(undefined);
   const collapseTimer = useRef<number | undefined>(undefined);
 
@@ -119,6 +124,43 @@ export function App() {
       subs.forEach((p) => void p.then((un) => un()).catch(() => undefined));
     };
   }, [focusGoal, dismissToast]);
+
+  // Frosted glass is decided by the core (Windows version and settings).
+  const glass = snapshot?.glass ?? false;
+  useEffect(() => {
+    document.documentElement.toggleAttribute('data-glass', glass);
+  }, [glass]);
+
+  // The panel fits its content: report the height it needs (the core keeps
+  // it within a compact range and on screen). Overlays get the full height.
+  const tall = overlay !== null || welcome;
+  useEffect(() => {
+    const panel = panelRef.current;
+    const main = mainRef.current;
+    const content = contentRef.current;
+    if (!panel || !main || !content || typeof ResizeObserver === 'undefined') return;
+    let frame = 0;
+    let reported = 0;
+    const report = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const style = getComputedStyle(main);
+        const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        const chrome = panel.offsetHeight - main.clientHeight;
+        const needed = tall ? FULL_HEIGHT : Math.ceil(chrome + padding + content.offsetHeight);
+        if (Math.abs(needed - reported) < 2) return;
+        reported = needed;
+        void api.setPanelHeight(needed).catch(() => undefined);
+      });
+    };
+    const observer = new ResizeObserver(report);
+    observer.observe(content);
+    report();
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [tall]);
 
   // Pending copy feedback / collapse must never outlive the shell.
   useEffect(
@@ -312,7 +354,7 @@ export function App() {
 
   return (
     <div className="stage">
-      <div className={`panel${entering ? ' is-entering' : ''}`}>
+      <div ref={panelRef} className={`panel${entering ? ' is-entering' : ''}`}>
         <Header
           pinned={pinned}
           settingsOpen={overlay?.kind === 'settings'}
@@ -322,65 +364,67 @@ export function App() {
         />
 
         <div className="body">
-          <main className="main scroll">
-            <GoalInput
-              value={query}
-              onChange={onQueryChange}
-              onSubmit={() => void search.run(query)}
-              inputRef={inputRef}
-              disabled={snapshot !== null && !libraryReady}
-              hasResult={hasResult}
-            />
-
-            {hotkeyUnavailable && !hotkeyNoticeDismissed && (
-              <HotkeyUnavailable
-                hotkey={snapshot.hotkey}
-                onChoose={() => setOverlay({ kind: 'settings' })}
-                onDismiss={() => setHotkeyNoticeDismissed(true)}
+          <main ref={mainRef} className="main scroll">
+            <div ref={contentRef}>
+              <GoalInput
+                value={query}
+                onChange={onQueryChange}
+                onSubmit={() => void search.run(query)}
+                inputRef={inputRef}
+                disabled={snapshot !== null && !libraryReady}
+                hasResult={hasResult}
               />
-            )}
 
-            {snapshotError && !snapshot && (
-              <div className="notice is-error" role="alert" style={{ marginTop: 14 }}>
-                <Icon name="alert" size={17} />
-                <div className="notice-body">{snapshotError}</div>
-              </div>
-            )}
+              {hotkeyUnavailable && !hotkeyNoticeDismissed && (
+                <HotkeyUnavailable
+                  hotkey={snapshot.hotkey}
+                  onChoose={() => setOverlay({ kind: 'settings' })}
+                  onDismiss={() => setHotkeyNoticeDismissed(true)}
+                />
+              )}
 
-            {library && !library.available ? (
-              <div style={{ marginTop: 14 }}>
-                <LibraryUnavailable
-                  library={library}
-                  onChanged={onLibraryChanged}
-                  onOpenSettings={() => setOverlay({ kind: 'settings' })}
-                />
-              </div>
-            ) : (
-              <>
-                <ResultRegion
-                  state={search.state}
-                  pendingVisible={search.pendingVisible}
-                  slow={search.slow}
-                  ai={ai}
-                  copiedId={copiedId}
-                  onCopy={(s) => void copy(s)}
-                  onToggleFavorite={(s) => void toggleFavorite(s)}
-                  onEdit={(s) => setOverlay({ kind: 'edit', id: s.id })}
-                  onDelete={(s) => void deleteSpark(s)}
-                  onAdd={openAdd}
-                />
-                {emptyLibrary ? (
-                  <EmptyLibrary onAdd={openAdd} />
-                ) : (
-                  <Favorites
-                    favorites={favorites}
+              {snapshotError && !snapshot && (
+                <div className="notice is-error" role="alert" style={{ marginTop: 14 }}>
+                  <Icon name="alert" size={17} />
+                  <div className="notice-body">{snapshotError}</div>
+                </div>
+              )}
+
+              {library && !library.available ? (
+                <div style={{ marginTop: 14 }}>
+                  <LibraryUnavailable
+                    library={library}
+                    onChanged={onLibraryChanged}
+                    onOpenSettings={() => setOverlay({ kind: 'settings' })}
+                  />
+                </div>
+              ) : (
+                <>
+                  <ResultRegion
+                    state={search.state}
+                    pendingVisible={search.pendingVisible}
+                    slow={search.slow}
+                    ai={ai}
                     copiedId={copiedId}
                     onCopy={(s) => void copy(s)}
                     onToggleFavorite={(s) => void toggleFavorite(s)}
+                    onEdit={(s) => setOverlay({ kind: 'edit', id: s.id })}
+                    onDelete={(s) => void deleteSpark(s)}
+                    onAdd={openAdd}
                   />
-                )}
-              </>
-            )}
+                  {emptyLibrary ? (
+                    <EmptyLibrary onAdd={openAdd} />
+                  ) : (
+                    <Favorites
+                      favorites={favorites}
+                      copiedId={copiedId}
+                      onCopy={(s) => void copy(s)}
+                      onToggleFavorite={(s) => void toggleFavorite(s)}
+                    />
+                  )}
+                </>
+              )}
+            </div>
           </main>
 
           <div className="dock">

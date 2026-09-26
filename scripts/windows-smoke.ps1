@@ -9,7 +9,8 @@
     2. The first run shows the panel and registers no global shortcut until the
        user chooses one.
     3. The app launches, creates and seeds the local library.
-    4. The window docks to the right edge of the monitor work area (taskbar excluded).
+    4. The panel docks top-right inside the monitor work area (taskbar excluded),
+       compact rather than full height.
     5. A second launch does not create a second instance.
     6. The global activation hotkey (Ctrl+Alt+Space, seeded as the user's
        choice) hides and re-shows the panel.
@@ -41,6 +42,8 @@ public static class Win {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  // What the user sees: the window rect minus invisible resize borders.
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
   [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFO mi);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
@@ -203,11 +206,18 @@ if ($appeared) {
   $mi.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($mi)
   [Win]::GetMonitorInfo([Win]::MonitorFromWindow($h, 2), [ref]$mi) | Out-Null
   $work = $mi.rcWork
+  $v = New-Object Win+RECT
+  if ([Win]::DwmGetWindowAttribute($h, 9, [ref]$v, 16) -ne 0) { $v = $r }  # DWMWA_EXTENDED_FRAME_BOUNDS
   Write-Host ("window  L{0} T{1} R{2} B{3}" -f $r.Left, $r.Top, $r.Right, $r.Bottom)
+  Write-Host ("visible L{0} T{1} R{2} B{3}" -f $v.Left, $v.Top, $v.Right, $v.Bottom)
   Write-Host ("work    L{0} T{1} R{2} B{3}" -f $work.Left, $work.Top, $work.Right, $work.Bottom)
-  Check ([Math]::Abs($r.Right - $work.Right) -le 1) 'docked to the right edge of the work area'
-  Check ([Math]::Abs($r.Top - $work.Top) -le 1 -and [Math]::Abs($r.Bottom - $work.Bottom) -le 1) 'spans the work area height (taskbar respected)'
-  $width = $r.Right - $r.Left
+  # A small flyout gap (8 px at 100%) separates the panel from the edges.
+  $gapRight = $work.Right - $v.Right; $gapTop = $v.Top - $work.Top
+  Check ($gapRight -ge 0 -and $gapRight -le 16) "docked to the right edge of the work area (gap $gapRight px)"
+  Check ($gapTop -ge 0 -and $gapTop -le 16) "anchored to the top of the work area (gap $gapTop px)"
+  $height = $v.Bottom - $v.Top
+  Check ($v.Bottom -le $work.Bottom -and $height -ge 480 -and $height -le 920) "compact height inside the work area ($height px)"
+  $width = $v.Right - $v.Left
   Check ($width -ge 380 -and $width -le 1100) "compact width ($width px)"
   Save-Screenshot 'sparkwell-docked.png' $r
 }
