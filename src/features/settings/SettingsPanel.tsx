@@ -34,7 +34,9 @@ function intelligenceText(ai: AiStatus): { title: string; detail: string | null;
     title: ai.indexing
       ? `Local intelligence ready · indexing ${ai.indexed}/${ai.total}`
       : 'Local intelligence ready · semantic search active',
-    detail: ai.chatModel ? 'Smart Add can draft titles, summaries and tags.' : null,
+    detail: ai.chatModel
+      ? `Auto-fill in Add New Spark drafts titles, summaries and tags with ${ai.chatModel}.`
+      : `Auto-fill in Add New Spark needs a ${ai.chatModelsTooLarge ? 'smaller' : 'small'} local model (for example: ollama pull qwen2.5:3b).`,
     ready: true,
   };
 }

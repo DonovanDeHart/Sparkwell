@@ -176,7 +176,9 @@ describe('Add New Spark', () => {
     const user = await renderApp();
     await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Add New Spark' });
-    expect(within(dialog).queryByText(/Auto-fill details/)).not.toBeInTheDocument();
+    // Auto-fill is always offered, and says why it can't run.
+    expect(within(dialog).getByRole('button', { name: /Auto-fill details/ })).toBeDisabled();
+    expect(within(dialog).getByText(/Auto-fill uses local intelligence \(Ollama\), which is offline/)).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText(/^Spark/), 'You are a Kubernetes expert. Diagnose my cluster.');
     await user.type(within(dialog).getByLabelText(/^Title/), 'Kubernetes Doctor');
     await user.type(within(dialog).getByLabelText(/^Tags/), 'DevOps{Enter}k8s,');
@@ -229,17 +231,37 @@ describe('Add New Spark', () => {
     expect(calls('hide_panel')).toHaveLength(0);
   });
 
-  it('drafts editable metadata when local intelligence is ready', async () => {
+  it('drafts editable metadata only when asked, never on paste', async () => {
     const user = await renderApp();
-    act(() => mock.setAi({ state: 'online', embedModel: 'nomic-embed-text', chatModel: 'llama3.2' }));
+    act(() => mock.setAi({ state: 'online', embedModel: 'nomic-embed-text', chatModel: 'qwen2.5:3b' }));
     await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
     const dialog = await screen.findByRole('dialog');
-    await user.type(within(dialog).getByLabelText(/^Spark/), 'Analyze quarterly revenue spreadsheets carefully');
+    const body = within(dialog).getByLabelText(/^Spark/);
+    await waitFor(() => expect(body).toHaveFocus());
+    await user.paste('Analyze quarterly revenue spreadsheets carefully');
+    expect(body).toHaveValue('Analyze quarterly revenue spreadsheets carefully');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls('suggest_metadata')).toHaveLength(0);
+    expect(within(dialog).getByLabelText(/^Title/)).toHaveValue('');
+
     await user.click(within(dialog).getByRole('button', { name: /Auto-fill details/ }));
     await waitFor(() => expect(within(dialog).getByLabelText(/^Title/)).not.toHaveValue(''));
     expect(within(dialog).getByText(/Details drafted locally/)).toBeInTheDocument();
     // Nothing is saved until the user presses Save.
     expect(calls('create_spark')).toHaveLength(0);
+  });
+
+  it('explains that Auto-fill needs a small model when only large ones are installed', async () => {
+    const user = await renderApp();
+    act(() =>
+      mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:0.6b', chatModel: null, chatModelsTooLarge: true }),
+    );
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/^Spark/), 'Plan a product launch');
+    expect(within(dialog).getByRole('button', { name: /Auto-fill details/ })).toBeDisabled();
+    expect(within(dialog).getByText(/too large for quick drafting/)).toBeInTheDocument();
+    expect(within(dialog).getByText('ollama pull qwen2.5:3b')).toBeInTheDocument();
   });
 
   it('edits an existing Spark from the Best Match menu', async () => {

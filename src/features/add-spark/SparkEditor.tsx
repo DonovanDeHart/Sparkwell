@@ -28,6 +28,23 @@ interface Draft {
 
 const EMPTY: Draft = { body: '', title: '', summary: '', tags: [], favorite: false };
 
+/** A small model that drafts quickly without pushing the embedding model out of memory. */
+const SMALL_MODEL_HINT = 'ollama pull qwen2.5:3b';
+
+/** Why Auto-fill can't run right now, or null when it can. */
+function autoFillUnavailable(ai: AiStatus): { text: string; command?: string } | null {
+  if (smartAddReady(ai)) return null;
+  if (ai.state === 'checking') return { text: 'Checking for local intelligence…' };
+  if (ai.state === 'offline')
+    return { text: 'Auto-fill uses local intelligence (Ollama), which is offline. The details are optional.' };
+  if (ai.chatModelsTooLarge)
+    return {
+      text: 'Your local models are too large for quick drafting. A small one enables Auto-fill:',
+      command: SMALL_MODEL_HINT,
+    };
+  return { text: 'Auto-fill needs a small local model:', command: SMALL_MODEL_HINT };
+}
+
 function addTags(existing: string[], raw: string): string[] {
   const next = [...existing];
   for (const piece of raw.split(',')) {
@@ -58,7 +75,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
-  const aiReady = smartAddReady(ai);
+  const unavailable = autoFillUnavailable(ai);
 
   useEffect(() => {
     if (mode.kind !== 'edit') {
@@ -107,10 +124,10 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
     draft.favorite !== initial.favorite ||
     draft.tags.join('\u0000') !== initial.tags.join('\u0000');
 
-  /** Asks local intelligence for title/summary/tags. `onlyEmpty` (automatic
-   *  runs) never overwrites anything the user has typed. */
+  /** Asks local intelligence for title/summary/tags, only when the user asks.
+   *  Fields the user edits while it runs are kept. */
   const runSmartAdd = useCallback(
-    async (body: string, onlyEmpty: boolean) => {
+    async (body: string) => {
       if (!body.trim()) return;
       const id = ++draftRequest.current;
       const before = draftRef.current;
@@ -121,11 +138,10 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
         if (draftRequest.current !== id) return;
         setDraft((d) => ({
           ...d,
-          // Fill a field if it's empty, or (manual run) if the user hasn't
-          // touched it since the request started.
-          title: !d.title.trim() || (!onlyEmpty && d.title === before.title) ? s.title : d.title,
-          summary: !d.summary.trim() || (!onlyEmpty && d.summary === before.summary) ? s.summary : d.summary,
-          tags: d.tags.length === 0 || (!onlyEmpty && d.tags === before.tags) ? s.tags : d.tags,
+          // Fill a field if it's empty or untouched since the request started.
+          title: !d.title.trim() || d.title === before.title ? s.title : d.title,
+          summary: !d.summary.trim() || d.summary === before.summary ? s.summary : d.summary,
+          tags: d.tags.length === 0 || d.tags === before.tags ? s.tags : d.tags,
         }));
         setDraftNote('Details drafted locally — edit anything before saving.');
       } catch (err) {
@@ -255,42 +271,48 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                 spellCheck={false}
                 placeholder="Paste or write the full Spark — the prompt, workflow, role, or instructions you want to reuse."
                 onChange={(e) => update({ body: e.target.value })}
-                onPaste={(e) => {
-                  const pasted = e.clipboardData.getData('text');
-                  const wasEmpty = !draftRef.current.body.trim();
-                  if (aiReady && wasEmpty && pasted.trim() && !draftRef.current.title.trim() && !draftRef.current.summary.trim()) {
-                    // Let the paste land, then draft details from it.
-                    window.setTimeout(() => void runSmartAdd(pasted, true), 0);
-                  }
-                }}
               />
             </div>
 
-            {aiReady && (
-              <div className="smart-add" aria-live="polite">
-                {drafting ? (
-                  <>
-                    <span className="spinner" aria-hidden="true" />
-                    <span className="smart-add-text">Drafting title, summary & tags locally…</span>
-                    <button type="button" className="button is-quiet smart-add-cancel" onClick={cancelSmartAdd}>
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="button is-ice smart-add-button"
-                      disabled={!draft.body.trim()}
-                      onClick={() => void runSmartAdd(draft.body, false)}
-                    >
-                      <Icon name="sparkle" size={16} /> Auto-fill details
-                    </button>
-                    {draftNote && <span className="smart-add-text">{draftNote}</span>}
-                  </>
-                )}
-              </div>
-            )}
+            <div className="smart-add" aria-live="polite">
+              {drafting ? (
+                <>
+                  <span className="spinner" aria-hidden="true" />
+                  <span className="smart-add-text">Drafting title, summary & tags locally…</span>
+                  <button type="button" className="button is-quiet smart-add-cancel" onClick={cancelSmartAdd}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="button is-ice smart-add-button"
+                    disabled={unavailable !== null || !draft.body.trim()}
+                    title={ai.chatModel ? `Drafts locally with ${ai.chatModel}` : undefined}
+                    aria-describedby="smart-add-status"
+                    onClick={() => void runSmartAdd(draft.body)}
+                  >
+                    <Icon name="sparkle" size={16} /> Auto-fill details
+                  </button>
+                  <span id="smart-add-status" className="smart-add-text">
+                    {unavailable ? (
+                      <>
+                        {unavailable.text}
+                        {unavailable.command && (
+                          <>
+                            {' '}
+                            <code className="selectable">{unavailable.command}</code>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      (draftNote ?? (draft.body.trim() ? null : 'Paste the Spark first, then draft its details.'))
+                    )}
+                  </span>
+                </>
+              )}
+            </div>
 
             <div className="field">
               <label className="field-label" htmlFor="spark-title">
