@@ -43,20 +43,22 @@ WebView2 is part of Windows 11; the installer fetches it automatically on system
 ## Local intelligence with Ollama (optional)
 
 1. Install Ollama from <https://ollama.com> and make sure it is running.
-2. Pull an embedding model for semantic search:
+2. Pull Sparkwell's semantic-search model, Qwen3 Embedding 8B (about 8 GB; Sparkwell never downloads it for you):
    ```powershell
-   ollama pull nomic-embed-text
+   ollama pull qwen3-embedding:8b-q8_0
    ```
+   It is the one embedding model Sparkwell is calibrated for; other embedding models are not used. It needs about 9 GB of GPU memory while loaded (it stays loaded for 30 minutes after use). Until it is installed, Settings says "Local semantic search is not ready" and searches use standard search.
 3. Optionally pull a small chat model for Auto-fill in Add New Spark. Only small models (up to about 8 B parameters) are used, so drafting takes seconds and doesn't push the embedding model out of memory:
    ```powershell
    ollama pull qwen2.5:3b     # or: ollama pull llama3.2
    ```
 
-Sparkwell detects Ollama automatically (it checks in the background and whenever the panel opens), embeds your library in the background, and keeps the index current as you add or edit Sparks. There is no model configuration UI by design. Power users can override the automatic choice with the `SPARKWELL_EMBED_MODEL` / `SPARKWELL_CHAT_MODEL` environment variables.
+Sparkwell detects Ollama automatically (it checks in the background and whenever the panel opens), indexes your library in the background (the footer shows "Indexing Sparks…"), and keeps the index current as you add or edit Sparks. Retrieval uses compact retrieval profiles derived from each Spark; the Spark you saved is never changed. There is no model configuration UI by design. `SPARKWELL_CHAT_MODEL` picks the Auto-fill model; `SPARKWELL_EMBED_MODEL` exists for development only (other embedding models are uncalibrated).
 
 | Ollama | What you get |
 | --- | --- |
-| Running with an embedding model | Semantic + lexical hybrid retrieval ("Matched by local intelligence") |
+| Running with `qwen3-embedding:8b-q8_0` | Semantic + lexical hybrid retrieval ("Matched by local intelligence") |
+| Running without it | Standard search, labelled "semantic model not installed" |
 | Running with a small chat model | Auto-fill drafts a title, summary and tags on request |
 | Stopped, missing, or busy | Standard search (title, tags, summary, full text); Favorites, Add, Copy, Settings all work |
 
