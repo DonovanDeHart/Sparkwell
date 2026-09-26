@@ -83,6 +83,8 @@ export interface AppSnapshot {
   version: string;
   platform: string;
   pinned: boolean;
+  /** First-run welcome finished (shortcut chosen or skipped). */
+  onboarded: boolean;
   hotkey: HotkeyStatus;
   launchAtStartup: boolean;
   library: LibraryInfo;

@@ -237,3 +237,34 @@
   padding: 0 10px;
   font-size: var(--fs-xs);
 }
+
+.hotkey-unset {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* First-run welcome */
+.welcome-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 28px;
+}
+
+.welcome-title {
+  margin: 4px 0 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.welcome-lead {
+  margin: 0 0 6px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.welcome-foot {
+  justify-content: flex-end;
+}

@@ -68,6 +68,24 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
     crate::ai::on_panel_shown(app);
 }
 
+/// Shows the panel without activating it. The window is created unfocused
+/// (`focus: false`), so showing it uses SW_SHOWNOACTIVATE; only [`show`]
+/// then takes focus explicitly.
+pub fn show_passive<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = main_window(app) else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        return;
+    }
+    dock(&window);
+    let _ = window.set_always_on_top(app.state::<AppState>().is_pinned());
+    if let Err(e) = window.show() {
+        log::warn!("failed to show the sidebar: {e}");
+    }
+    let _ = app.emit(EVENT_SHOWN, true);
+}
+
 pub fn hide<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = main_window(app) else {
         return;
@@ -114,6 +132,40 @@ pub fn toggle_from_tray<R: Runtime>(app: &AppHandle<R>) {
         hide(app);
     } else {
         show(app);
+    }
+}
+
+/// Tray tooltip text for the activation shortcut's state.
+pub fn tray_tooltip(status: &crate::hotkey::HotkeyStatus) -> String {
+    if status.registered {
+        format!(
+            "Sparkwell · {}",
+            crate::hotkey::display(&status.accelerator)
+        )
+    } else if status.accelerator.is_empty() {
+        "Sparkwell · click to open".into()
+    } else {
+        format!(
+            "Sparkwell · {} unavailable, click to open",
+            crate::hotkey::display(&status.accelerator)
+        )
+    }
+}
+
+/// Keeps the tray tooltip in step with the activation shortcut, so a
+/// shortcut that doesn't work is visible outside the panel too.
+pub fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
+    let Some(tray) = app.tray_by_id("sparkwell") else {
+        return;
+    };
+    let status = app
+        .state::<AppState>()
+        .hotkey
+        .lock()
+        .map(|h| h.clone())
+        .ok();
+    if let Some(status) = status {
+        let _ = tray.set_tooltip(Some(tray_tooltip(&status)));
     }
 }
 
@@ -186,5 +238,36 @@ impl Drop for AutohideSuppressed<'_> {
             // Treat returning from the dialog like a fresh show.
             *t = Instant::now();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hotkey::HotkeyStatus;
+
+    fn status(accelerator: &str, registered: bool) -> HotkeyStatus {
+        HotkeyStatus {
+            accelerator: accelerator.into(),
+            registered,
+            error: None,
+            suspended: false,
+        }
+    }
+
+    #[test]
+    fn tray_tooltip_reflects_the_shortcut() {
+        assert_eq!(
+            tray_tooltip(&status("Ctrl+Super+K", true)),
+            "Sparkwell · Ctrl+Win+K"
+        );
+        assert_eq!(
+            tray_tooltip(&status("", false)),
+            "Sparkwell · click to open"
+        );
+        assert_eq!(
+            tray_tooltip(&status("Ctrl+Alt+Space", false)),
+            "Sparkwell · Ctrl+Alt+Space unavailable, click to open"
+        );
     }
 }

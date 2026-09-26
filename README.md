@@ -15,7 +15,7 @@ A **Spark** is a reusable expression of intent: a prompt, workflow, role definit
 - **Favorites** for direct, one-click copying of the Sparks you use most.
 - **+ Add New Spark** — paste a Spark and save it. Title and summary are optional (derived from the text if left blank). With local AI available, *Smart Add* drafts a title, summary and tags you can edit before saving.
 - **Right-edge sidebar** on the monitor you're working on, respecting the taskbar and per-monitor scaling. Pin it to keep it on top; unpinned it collapses on Esc, click-away, or after copying.
-- **Custom global hotkey** (default `Ctrl+Alt+Space`) — recorded in Settings, validated, and conflict-checked.
+- **Your own global shortcut.** On first run Sparkwell asks you to press the shortcut you want (no single combination is free on every machine), validates it, and checks it isn't taken by another app. You can skip and set it later in Settings; the tray icon always opens Sparkwell. If a saved shortcut stops working (another app took it), Sparkwell tells you at startup instead of failing silently.
 - **Local-first.** The library is a single SQLite file on your device. No account, no cloud, no telemetry.
 - **Optional local intelligence.** If [Ollama](https://ollama.com) is running, retrieval becomes semantic (matching meaning, not just words) and Smart Add becomes available. Without it, everything still works with standard search.
 
@@ -23,7 +23,7 @@ A **Spark** is a reusable expression of intent: a prompt, workflow, role definit
 
 | Keys | Action |
 | --- | --- |
-| Activation hotkey (default `Ctrl+Alt+Space`) | Show / focus / hide Sparkwell from any app |
+| Your activation shortcut (chosen on first run) | Show / focus / hide Sparkwell from any app |
 | `Enter` | Find the best Spark for the goal |
 | `Shift+Enter` | New line in the goal |
 | `Ctrl+Enter` | Copy the Best Match |

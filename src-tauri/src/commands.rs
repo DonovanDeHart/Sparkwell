@@ -31,6 +31,8 @@ pub struct AppSnapshot {
     pub version: String,
     pub platform: &'static str,
     pub pinned: bool,
+    /// First-run welcome finished (shortcut chosen or skipped).
+    pub onboarded: bool,
     pub hotkey: HotkeyStatus,
     pub launch_at_startup: bool,
     pub library: LibraryInfo,
@@ -58,6 +60,7 @@ pub async fn get_app_snapshot<R: Runtime>(
         version: app.package_info().version.to_string(),
         platform: std::env::consts::OS,
         pinned: state.is_pinned(),
+        onboarded: state.config_snapshot().onboarded,
         hotkey: state
             .hotkey
             .lock()
@@ -223,7 +226,16 @@ pub async fn set_hotkey<R: Runtime>(
     app: AppHandle<R>,
     accelerator: String,
 ) -> AppResult<HotkeyStatus> {
-    hotkey::change(&app, &accelerator)
+    let status = hotkey::change(&app, &accelerator)?;
+    window::refresh_tray(&app);
+    Ok(status)
+}
+
+/// Ends the first-run welcome, whether a shortcut was chosen or skipped.
+#[tauri::command]
+pub async fn finish_onboarding(state: State<'_, AppState>) -> AppResult<bool> {
+    state.update_config(|c| c.onboarded = true)?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -233,7 +245,9 @@ pub async fn begin_hotkey_capture<R: Runtime>(app: AppHandle<R>) -> AppResult<()
 
 #[tauri::command]
 pub async fn end_hotkey_capture<R: Runtime>(app: AppHandle<R>) -> AppResult<HotkeyStatus> {
-    hotkey::resume(&app)
+    let status = hotkey::resume(&app)?;
+    window::refresh_tray(&app);
+    Ok(status)
 }
 
 // -------------------------------------------------------------- Settings ---

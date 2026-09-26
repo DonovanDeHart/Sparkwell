@@ -174,14 +174,13 @@ function validateHotkey(accel: string): string | { error: string } {
     else if (key) return { error: 'Use only one key with your modifiers.' };
     else key = p.replace(/^Key(?=[A-Z]$)/, '').replace(/^Digit(?=\d$)/, '');
   }
-  if (!key) return { error: 'Add a key to go with the modifier, like Ctrl+Alt+Space.' };
+  if (!key) return { error: 'Add a letter, number, Space or function key to go with the modifier keys.' };
   if (['Escape', 'Tab', 'CapsLock', 'Delete', 'Backspace'].includes(key))
     return { error: `${key} can't be used in the activation shortcut.` };
   const typing = /^[A-Z0-9]$/.test(key) || ['Space', 'Enter', 'Period', 'Comma', 'Slash'].includes(key);
   if (typing && mods.size < 2)
     return {
-      error:
-        "Use at least two modifiers (for example Ctrl+Alt+Space) so the shortcut doesn't take over typing in other apps.",
+      error: `Hold two modifier keys with ${key} (for example Ctrl and Shift) so the shortcut doesn't take over typing in other apps.`,
     };
   if (!typing && !/^F(1[3-9]|2[0-4])$/.test(key) && mods.size < 1)
     return { error: `Add Ctrl, Alt, Shift, or Win to ${key}.` };
@@ -194,13 +193,16 @@ export interface MockControl {
   failNext(command: string, error: { kind: string; message: string }): void;
   delay(command: string, ms: number): void;
   setLibraryAvailable(available: boolean, error?: string): void;
+  /** Startup state of the activation shortcut (e.g. taken by another app). */
+  setHotkeyStatus(status: HotkeyStatus): void;
   /** Accelerators "owned by another app". */
   takenHotkeys: Set<string>;
   /** Forces standard search with this reason (null: decide from AI status). */
   searchFallback: Fallback | null;
   lastClipboard: string | null;
   calls: Array<{ cmd: string; args?: Record<string, unknown> }>;
-  reset(options?: { empty?: boolean }): void;
+  /** `firstRun`: no config yet, so no shortcut and the welcome is pending. */
+  reset(options?: { empty?: boolean; firstRun?: boolean }): void;
 }
 
 export function createMockBackend() {
@@ -211,7 +213,8 @@ export function createMockBackend() {
   const delays = new Map<string, number>();
   let pinned = false;
   let launchAtStartup = false;
-  let hotkey: HotkeyStatus = { accelerator: 'Ctrl+Alt+Space', registered: true, error: null };
+  let onboarded = true;
+  let hotkey: HotkeyStatus = { accelerator: 'Ctrl+Shift+Space', registered: true, error: null };
   let library: Omit<LibraryInfo, 'sparkCount'> = {
     dir: 'C:\\Users\\you\\AppData\\Local\\Sparkwell\\Library',
     file: 'C:\\Users\\you\\AppData\\Local\\Sparkwell\\Library\\sparkwell.db',
@@ -296,6 +299,7 @@ export function createMockBackend() {
       version: '0.1.0',
       platform: 'windows',
       pinned,
+      onboarded,
       hotkey,
       launchAtStartup,
       library: libInfo(),
@@ -435,6 +439,10 @@ export function createMockBackend() {
       hotkey = { accelerator: v, registered: true, error: null };
       return hotkey;
     },
+    finish_onboarding: () => {
+      onboarded = true;
+      return true;
+    },
     begin_hotkey_capture: () => null,
     end_hotkey_capture: () => hotkey,
     set_launch_at_startup: ({ enabled }) => {
@@ -490,6 +498,9 @@ export function createMockBackend() {
     setLibraryAvailable(available, error) {
       library = { ...library, available, error: available ? null : (error ?? 'The library could not be opened.') };
     },
+    setHotkeyStatus(status) {
+      hotkey = { ...status };
+    },
     takenHotkeys: new Set(['Ctrl+Alt+K']),
     searchFallback: null,
     lastClipboard: null,
@@ -499,7 +510,10 @@ export function createMockBackend() {
       if (options?.empty) sparks = [];
       pinned = false;
       launchAtStartup = false;
-      hotkey = { accelerator: 'Ctrl+Alt+Space', registered: true, error: null };
+      onboarded = !options?.firstRun;
+      hotkey = options?.firstRun
+        ? { accelerator: '', registered: false, error: null }
+        : { accelerator: 'Ctrl+Shift+Space', registered: true, error: null };
       ai = { state: 'offline', embedModel: null, chatModel: null, chatModelsTooLarge: false, indexed: 0, total: 0, indexing: false };
       failures.clear();
       delays.clear();

@@ -55,6 +55,9 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let slot = library::open_slot(&library_dir, is_default);
 
     let hotkey_status = hotkey::register_initial(app.handle(), &config.hotkey);
+    // The first run asks for a shortcut, and a saved shortcut that no longer
+    // registers is shown to the user instead of leaving Sparkwell unreachable.
+    let needs_attention = !config.onboarded || hotkey_status.error.is_some();
     let pinned = config.pinned;
     app.manage(AppState::new(
         config_path,
@@ -65,6 +68,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     build_tray(app)?;
+    window::refresh_tray(app.handle());
 
     if let Some(w) = window::main_window(app.handle()) {
         let _ = w.set_always_on_top(pinned);
@@ -72,6 +76,9 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let start_hidden = std::env::args().any(|a| a == HIDDEN_ARG);
     if !start_hidden {
         window::show(app.handle());
+    } else if needs_attention {
+        // Sign-in start: visible, but the app the user is in keeps focus.
+        window::show_passive(app.handle());
     }
 
     ai::spawn_service(app.handle().clone());
@@ -171,6 +178,7 @@ pub fn run() {
             commands::hide_panel,
             commands::quit_app,
             commands::set_hotkey,
+            commands::finish_onboarding,
             commands::begin_hotkey_capture,
             commands::end_hotkey_capture,
             commands::set_launch_at_startup,

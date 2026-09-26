@@ -6,15 +6,21 @@
 
   Verifies, against the real packaged app:
     1. The NSIS installer installs silently (per-user, no admin).
-    2. The app launches, creates and seeds the local library.
-    3. The window docks to the right edge of the monitor work area (taskbar excluded).
-    4. A second launch does not create a second instance.
-    5. The global activation hotkey (Ctrl+Alt+Space) hides and re-shows the panel.
-    6. The core loop by keyboard: type a goal, Enter, Ctrl+Enter -> the complete
+    2. The first run shows the panel and registers no global shortcut until the
+       user chooses one.
+    3. The app launches, creates and seeds the local library.
+    4. The window docks to the right edge of the monitor work area (taskbar excluded).
+    5. A second launch does not create a second instance.
+    6. The global activation hotkey (Ctrl+Alt+Space, seeded as the user's
+       choice) hides and re-shows the panel.
+    7. The core loop by keyboard: type a goal, Enter, Ctrl+Enter -> the complete
        Spark is on the Windows clipboard and the unpinned panel collapses.
-    7. The library persists across a restart (retrieved and copied again).
-    8. `sparkwell --quit` closes it cleanly and sparkwell.db is complete on its own.
-    9. Uninstalling never deletes the user's library.
+    8. The library persists across a restart (retrieved and copied again).
+    9. `sparkwell --quit` closes it cleanly and sparkwell.db is complete on its own.
+   10. A sign-in start (`--hidden`) stays in the tray without taking focus; if the
+       saved shortcut is taken by another app it shows the panel, still without
+       taking focus.
+   11. Uninstalling never deletes the user's library.
   A screenshot of the docked panel is written to smoke-artifacts/.
 #>
 $ErrorActionPreference = 'Stop'
@@ -40,6 +46,8 @@ public static class Win {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
+  [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -153,7 +161,29 @@ Check ($null -ne $exe) "installer placed the app in $installDir"
 if (-not $exe) { exit 1 }
 
 $library = Join-Path $env:LOCALAPPDATA 'Sparkwell\Library\sparkwell.db'
+$config = Join-Path $env:LOCALAPPDATA 'Sparkwell\config.json'
 $log = Join-Path $env:LOCALAPPDATA 'com.sparkwell.app\logs\Sparkwell.log'
+
+function Quit-Sparkwell($running) {
+  $q = Start-Process -FilePath $exe.FullName -ArgumentList '--quit' -PassThru
+  $closed = Wait-Until { $running.HasExited } 10
+  if (-not $closed) { Stop-Process -Id $running.Id -Force }
+  Wait-Until { $q.HasExited } 5 | Out-Null
+  return $closed
+}
+
+# ------------------------------------------------------------------ first run
+if (-not (Test-Path $config)) {
+  $first = Start-Process -FilePath $exe.FullName -PassThru
+  Check (Wait-Until { $h = Find-Sparkwell; $h -ne [IntPtr]::Zero -and [Win]::IsWindowVisible($h) } 30) 'first run shows the panel to choose a shortcut'
+  Start-Sleep -Seconds 2
+  Check ((Test-Path $log) -and (Select-String -Path $log -Pattern 'no activation shortcut chosen yet' -Quiet)) 'first run registers no shortcut until the user chooses one'
+  Quit-Sparkwell $first | Out-Null
+  # The user's choice, as the welcome would save it.
+  [IO.File]::WriteAllText($config, '{ "hotkey": "Ctrl+Alt+Space", "onboarded": true }')
+} else {
+  Write-Host "NOTE  $config exists: skipping first-run checks; the hotkey checks assume it holds Ctrl+Alt+Space"
+}
 
 # ------------------------------------------------------------------ launch
 $proc = Start-Process -FilePath $exe.FullName -PassThru
@@ -224,14 +254,38 @@ if ($relaunched -and (Wait-Until { (Find-Sparkwell) -eq [Win]::GetForegroundWind
 }
 
 # ------------------------------------------------------------------ clean quit leaves a complete library file
-$quit = Start-Process -FilePath $exe.FullName -ArgumentList '--quit' -PassThru
-Check (Wait-Until { $proc.HasExited } 10) 'sparkwell --quit closes the running instance'
-if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
-Wait-Until { $quit.HasExited } 5 | Out-Null
+Check (Quit-Sparkwell $proc) 'sparkwell --quit closes the running instance'
 $wal = "$library-wal"
 Check (-not (Test-Path $wal) -or (Get-Item $wal).Length -eq 0) 'after a clean quit nothing is left only in the write-ahead log'
 Check ((Get-Item $library).Length -ge 64KB) "sparkwell.db holds the library on its own ($((Get-Item $library).Length) bytes)"
 Start-Sleep -Seconds 1
+
+# ------------------------------------------------------------------ quiet sign-in start
+function Start-Hidden {
+  $before = [Win]::GetForegroundWindow()
+  $p = Start-Process -FilePath $exe.FullName -ArgumentList '--hidden' -PassThru
+  Wait-Until { Test-Path $log } 10 | Out-Null
+  Start-Sleep -Seconds 6  # webview, tray and local-intelligence probe all settle
+  return @{ Proc = $p; FocusKept = ([Win]::GetForegroundWindow() -eq $before) }
+}
+$quiet = Start-Hidden
+Check (-not $quiet.Proc.HasExited) '--hidden start keeps running in the tray'
+Check (-not [Win]::IsWindowVisible((Find-Sparkwell))) '--hidden start keeps the panel hidden'
+Check $quiet.FocusKept '--hidden start leaves keyboard focus with the current app'
+Quit-Sparkwell $quiet.Proc | Out-Null
+
+# Another app owns the saved shortcut: the panel says so, without taking focus.
+$MOD_ALT = 0x1; $MOD_CONTROL = 0x2; $MOD_NOREPEAT = 0x4000
+if ([Win]::RegisterHotKey([IntPtr]::Zero, 0x5157, $MOD_CONTROL -bor $MOD_ALT -bor $MOD_NOREPEAT, 0x20)) {
+  $taken = Start-Hidden
+  Check ([Win]::IsWindowVisible((Find-Sparkwell))) 'a saved shortcut taken by another app is shown to the user at sign-in'
+  Check $taken.FocusKept '... without taking keyboard focus'
+  Save-FullScreenshot 'hotkey-unavailable.png'
+  Quit-Sparkwell $taken.Proc | Out-Null
+  [Win]::UnregisterHotKey([IntPtr]::Zero, 0x5157) | Out-Null
+} else {
+  Write-Host 'NOTE  Ctrl+Alt+Space is already taken on this machine; skipping the taken-shortcut check'
+}
 
 # ------------------------------------------------------------------ uninstall keeps the library
 $uninstaller = Join-Path $installDir 'uninstall.exe'

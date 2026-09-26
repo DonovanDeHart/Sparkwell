@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Icon } from '../components/Icon';
 import { api, toApiError } from '../services/api';
-import type { LibraryInfo } from '../services/types';
+import type { HotkeyStatus, LibraryInfo } from '../services/types';
 
 export function EmptyLibrary({ onAdd }: { onAdd: () => void }) {
   return (
@@ -17,6 +17,38 @@ export function EmptyLibrary({ onAdd }: { onAdd: () => void }) {
         </button>
       </div>
     </section>
+  );
+}
+
+/** The saved activation shortcut didn't register at startup (taken by another
+ *  app, or no longer valid). Sparkwell stays reachable from the tray; this
+ *  says why the shortcut does nothing and how to fix it. */
+export function HotkeyUnavailable({
+  hotkey,
+  onChoose,
+  onDismiss,
+}: {
+  hotkey: HotkeyStatus;
+  onChoose: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="notice is-warning" role="alert" style={{ marginTop: 14 }}>
+      <Icon name="keyboard" size={17} />
+      <div className="notice-body">
+        <span>
+          {hotkey.error} You can still open Sparkwell from its tray icon.
+        </span>
+        <div className="notice-actions">
+          <button type="button" className="button" onClick={onChoose}>
+            Choose a shortcut
+          </button>
+          <button type="button" className="button is-quiet" onClick={onDismiss}>
+            Not now
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

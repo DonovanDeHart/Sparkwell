@@ -6,11 +6,12 @@ import { Favorites } from '../features/favorites/Favorites';
 import { GoalInput } from '../features/search/GoalInput';
 import { ResultRegion } from '../features/search/ResultRegion';
 import { SettingsPanel } from '../features/settings/SettingsPanel';
+import { Welcome } from '../features/settings/Welcome';
 import { api, EVENTS, listen, toApiError } from '../services/api';
 import type { AiStatus, LibraryInfo, SparkSummary } from '../services/types';
 import { Footer } from './Footer';
 import { Header } from './Header';
-import { EmptyLibrary, LibraryUnavailable } from './StateCards';
+import { EmptyLibrary, HotkeyUnavailable, LibraryUnavailable } from './StateCards';
 import { useSearch } from './useSearch';
 import { useSnapshot } from './useSnapshot';
 
@@ -31,6 +32,17 @@ const OFFLINE_AI: AiStatus = {
 const COLLAPSE_AFTER_COPY_MS = 650;
 const COPIED_FEEDBACK_MS = 1800;
 
+/** Puts keyboard focus inside the top-most overlay (welcome, Settings, editor):
+ *  on its `data-autofocus` control if it has one, else on the overlay itself.
+ *  Returns false when no overlay is open. */
+function focusTopOverlay(): boolean {
+  const overlays = document.querySelectorAll<HTMLElement>('.overlay');
+  const top = overlays[overlays.length - 1];
+  if (!top) return false;
+  if (!top.contains(document.activeElement)) (top.querySelector<HTMLElement>('[data-autofocus]') ?? top).focus();
+  return true;
+}
+
 export function App() {
   const { snapshot, error: snapshotError, refresh, patch } = useSnapshot();
   const search = useSearch();
@@ -40,6 +52,7 @@ export function App() {
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [entering, setEntering] = useState(true);
+  const [hotkeyNoticeDismissed, setHotkeyNoticeDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const copiedTimer = useRef<number | undefined>(undefined);
   const collapseTimer = useRef<number | undefined>(undefined);
@@ -48,10 +61,13 @@ export function App() {
   const library = snapshot?.library ?? null;
   const libraryReady = library?.available ?? false;
   const ai = snapshot?.ai ?? OFFLINE_AI;
+  const welcome = snapshot !== null && !snapshot.onboarded;
+  const hotkeyUnavailable =
+    snapshot !== null && snapshot.onboarded && !snapshot.hotkey.registered && snapshot.hotkey.error !== null;
 
   // Latest values for event handlers registered once.
-  const live = useRef({ pinned, overlay, query, search, libraryReady });
-  live.current = { pinned, overlay, query, search, libraryReady };
+  const live = useRef({ pinned, overlay, query, search, libraryReady, welcome });
+  live.current = { pinned, overlay, query, search, libraryReady, welcome };
 
   const loadFavorites = useCallback(async () => {
     try {
@@ -89,7 +105,7 @@ export function App() {
           setEntering(true);
           window.setTimeout(() => setEntering(false), 260);
         }
-        if (!live.current.overlay) focusGoal(fresh);
+        if (!focusTopOverlay()) focusGoal(fresh);
       }),
       listen<null>(EVENTS.hidden, () => {
         window.clearTimeout(collapseTimer.current);
@@ -113,10 +129,10 @@ export function App() {
     [],
   );
 
-  // Focus the goal input as soon as the shell is ready.
+  // Focus the goal input (or the first-run welcome) as soon as the shell is ready.
   const hasSnapshot = snapshot !== null;
   useEffect(() => {
-    if (hasSnapshot) focusGoal(false);
+    if (hasSnapshot && !focusTopOverlay()) focusGoal(false);
   }, [hasSnapshot, focusGoal]);
 
   const hide = useCallback(() => {
@@ -180,8 +196,15 @@ export function App() {
 
   const closeOverlay = useCallback(() => {
     setOverlay(null);
-    requestAnimationFrame(() => focusGoal(false));
+    requestAnimationFrame(() => {
+      if (!focusTopOverlay()) focusGoal(false);
+    });
   }, [focusGoal]);
+
+  const finishWelcome = useCallback(() => {
+    patch({ onboarded: true });
+    requestAnimationFrame(() => focusGoal(false));
+  }, [patch, focusGoal]);
 
   const deleteSpark = useCallback(
     async (spark: SparkSummary) => {
@@ -246,7 +269,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
-      const { overlay: ov, pinned: isPinned, query: q, search: s } = live.current;
+      const { overlay: ov, pinned: isPinned, query: q, search: s, welcome: firstRun } = live.current;
       const mod = e.ctrlKey || e.metaKey;
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -262,7 +285,7 @@ export function App() {
         }
         return;
       }
-      if (ov) return;
+      if (ov || firstRun) return;
       if (mod && e.key === 'Enter') {
         e.preventDefault();
         const best = s.state.status === 'done' ? s.state.outcome.best : null;
@@ -308,6 +331,14 @@ export function App() {
               disabled={snapshot !== null && !libraryReady}
               hasResult={hasResult}
             />
+
+            {hotkeyUnavailable && !hotkeyNoticeDismissed && (
+              <HotkeyUnavailable
+                hotkey={snapshot.hotkey}
+                onChoose={() => setOverlay({ kind: 'settings' })}
+                onDismiss={() => setHotkeyNoticeDismissed(true)}
+              />
+            )}
 
             {snapshotError && !snapshot && (
               <div className="notice is-error" role="alert" style={{ marginTop: 14 }}>
@@ -365,6 +396,10 @@ export function App() {
           </div>
 
           <ToastView toast={toast} onDismiss={dismissToast} />
+
+          {welcome && (
+            <Welcome hotkey={snapshot.hotkey} onHotkeyChange={(hotkey) => patch({ hotkey })} onDone={finishWelcome} />
+          )}
 
           {overlay?.kind === 'settings' && snapshot && (
             <SettingsPanel

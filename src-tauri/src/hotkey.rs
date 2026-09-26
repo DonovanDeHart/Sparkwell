@@ -189,19 +189,16 @@ pub fn validate(accelerator: &str) -> AppResult<String> {
     }
 
     let (key_name, class) = key.ok_or_else(|| {
-        AppError::HotkeyInvalid("Add a key to go with the modifier, like Ctrl+Alt+Space.".into())
+        AppError::HotkeyInvalid(
+            "Add a letter, number, Space or function key to go with the modifier keys.".into(),
+        )
     })?;
     let modifiers = [ctrl, alt, shift, sup].iter().filter(|m| **m).count();
 
     match class {
         KeyClass::Typing if modifiers < 2 => {
-            let example = if modifiers == 0 {
-                format!("Ctrl+Alt+{key_name}")
-            } else {
-                "Ctrl+Alt+Space".into()
-            };
             return Err(AppError::HotkeyInvalid(format!(
-                "Use at least two modifiers (for example {example}) so the shortcut doesn't take over typing in other apps."
+                "Hold two modifier keys with {key_name} (for example Ctrl and Shift) so the shortcut doesn't take over typing in other apps."
             )));
         }
         KeyClass::Command if modifiers < 1 => {
@@ -266,11 +263,39 @@ fn conflict_message(accelerator: &str) -> String {
     )
 }
 
-/// Registers the configured shortcut at startup. Failure is recorded, not fatal.
-pub fn register_initial<R: Runtime>(app: &AppHandle<R>, configured: &str) -> HotkeyStatus {
-    let accelerator =
-        validate(configured).unwrap_or_else(|_| crate::settings::DEFAULT_HOTKEY.to_string());
-    match register(app, &accelerator) {
+/// Startup status for the saved shortcut. `register` performs the OS
+/// registration. Nothing is registered when no shortcut has been chosen yet,
+/// and a shortcut that can't be registered is reported, never replaced by a
+/// guess (Sparkwell stays reachable from its tray icon).
+pub fn initial_status(
+    configured: &str,
+    register: impl FnOnce(&str) -> Result<(), String>,
+) -> HotkeyStatus {
+    let configured = configured.trim();
+    if configured.is_empty() {
+        log::info!("no activation shortcut chosen yet");
+        return HotkeyStatus {
+            accelerator: String::new(),
+            registered: false,
+            error: None,
+            suspended: false,
+        };
+    }
+    let accelerator = match validate(configured) {
+        Ok(a) => a,
+        Err(_) => {
+            return HotkeyStatus {
+                error: Some(format!(
+                    "The saved shortcut ({}) isn't valid anymore. Choose a new one.",
+                    display(configured)
+                )),
+                accelerator: configured.to_string(),
+                registered: false,
+                suspended: false,
+            }
+        }
+    };
+    match register(&accelerator) {
         Ok(()) => HotkeyStatus {
             accelerator,
             registered: true,
@@ -287,6 +312,11 @@ pub fn register_initial<R: Runtime>(app: &AppHandle<R>, configured: &str) -> Hot
             }
         }
     }
+}
+
+/// Registers the configured shortcut at startup. Failure is recorded, not fatal.
+pub fn register_initial<R: Runtime>(app: &AppHandle<R>, configured: &str) -> HotkeyStatus {
+    initial_status(configured, |a| register(app, a))
 }
 
 /// Replaces the activation shortcut (unregister old -> register new -> persist).
@@ -370,6 +400,9 @@ pub fn resume_if_idle<R: Runtime>(app: &AppHandle<R>) {
     };
     if hk.suspended {
         hk.suspended = false;
+        if hk.accelerator.is_empty() {
+            return;
+        }
         if let Err(e) = register(app, &hk.accelerator) {
             log::warn!("could not re-register {}: {e}", hk.accelerator);
             hk.registered = false;
@@ -387,10 +420,12 @@ pub fn resume<R: Runtime>(app: &AppHandle<R>) -> AppResult<HotkeyStatus> {
         .map_err(|_| AppError::Internal("hotkey state poisoned".into()))?;
     if hk.suspended {
         hk.suspended = false;
-        if let Err(e) = register(app, &hk.accelerator) {
-            log::warn!("could not re-register {}: {e}", hk.accelerator);
-            hk.registered = false;
-            hk.error = Some(conflict_message(&hk.accelerator));
+        if !hk.accelerator.is_empty() {
+            if let Err(e) = register(app, &hk.accelerator) {
+                log::warn!("could not re-register {}: {e}", hk.accelerator);
+                hk.registered = false;
+                hk.error = Some(conflict_message(&hk.accelerator));
+            }
         }
     }
     Ok(hk.clone())
@@ -456,11 +491,43 @@ mod tests {
     }
 
     #[test]
-    fn default_hotkey_is_valid() {
-        assert_eq!(
-            ok(crate::settings::DEFAULT_HOTKEY),
-            crate::settings::DEFAULT_HOTKEY
+    fn guidance_never_recommends_a_fixed_shortcut() {
+        for bad in ["Ctrl+K", "Shift+Space", "Ctrl+Alt", "K"] {
+            let msg = validate(bad).unwrap_err().to_string();
+            assert!(!msg.contains("Ctrl+Alt+Space"), "{bad}: {msg}");
+        }
+    }
+
+    #[test]
+    fn startup_without_a_chosen_shortcut_registers_nothing() {
+        let status = initial_status("", |_| panic!("nothing to register"));
+        assert!(!status.registered);
+        assert_eq!(status.accelerator, "");
+        assert_eq!(status.error, None);
+    }
+
+    #[test]
+    fn startup_registration_failure_is_reported_not_replaced() {
+        let status = initial_status(
+            "Ctrl+Alt+Space",
+            |_| Err("HotKey already registered".into()),
         );
+        assert!(!status.registered);
+        assert_eq!(
+            status.accelerator, "Ctrl+Alt+Space",
+            "never swapped for a guess"
+        );
+        assert!(status.error.unwrap().contains("already in use"));
+
+        let status = initial_status("Ctrl+Shift+Space", |a| {
+            assert_eq!(a, "Ctrl+Shift+Space");
+            Ok(())
+        });
+        assert!(status.registered && status.error.is_none());
+
+        let status = initial_status("Ctrl+K", |_| panic!("invalid shortcuts aren't registered"));
+        assert!(!status.registered);
+        assert!(status.error.unwrap().contains("isn't valid anymore"));
     }
 
     #[test]

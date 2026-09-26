@@ -285,7 +285,7 @@ describe('Settings', () => {
   it('records, validates and saves a new activation hotkey', async () => {
     const user = await renderApp();
     const dialog = await openSettings(user);
-    expect(within(dialog).getByLabelText('Ctrl+Alt+Space')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Ctrl+Shift+Space')).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole('button', { name: 'Change' }));
     expect(calls('begin_hotkey_capture')).toHaveLength(1);
@@ -294,7 +294,7 @@ describe('Settings', () => {
 
     // Single-modifier letter: rejected, still recording.
     await user.keyboard('{Control>}k{/Control}');
-    expect(await within(dialog).findByText(/at least two modifiers/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Hold two modifier keys with K/)).toBeInTheDocument();
 
     // Owned by another app: conflict reported, previous shortcut kept.
     await user.keyboard('{Control>}{Alt>}k{/Alt}{/Control}');
@@ -313,10 +313,21 @@ describe('Settings', () => {
     await waitFor(() => expect(box).toHaveFocus());
     await user.keyboard('{Escape}');
     await waitFor(() => expect(calls('end_hotkey_capture')).toHaveLength(1));
-    expect(within(dialog).getByLabelText('Ctrl+Alt+Space')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Ctrl+Shift+Space')).toBeInTheDocument();
     // Escape inside the recorder must not close Settings or hide the panel.
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     expect(calls('hide_panel')).toHaveLength(0);
+  });
+
+  it('cancelling a recording clears its message', async () => {
+    const user = await renderApp();
+    const dialog = await openSettings(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Change' }));
+    await user.keyboard('{Control>}k{/Control}');
+    expect(await within(dialog).findByText(/Hold two modifier keys/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(within(dialog).queryByText(/Hold two modifier keys/)).not.toBeInTheDocument());
+    expect(within(dialog).getByLabelText('Ctrl+Shift+Space')).toBeInTheDocument();
   });
 
   it('toggles launch at startup and reflects the registered state', async () => {
@@ -355,5 +366,91 @@ describe('Settings', () => {
       'About',
     ]);
     expect(within(dialog).getByText('What is a Spark?')).toBeInTheDocument();
+  });
+});
+
+describe('Activation shortcut on first run', () => {
+  const welcomeDialog = () => screen.findByRole('dialog', { name: 'Welcome to Sparkwell' });
+
+  it('asks for a shortcut, keeps listening after a conflict, then continues', async () => {
+    mock.reset({ firstRun: true });
+    const user = userEvent.setup();
+    render(<App />);
+    const welcome = await welcomeDialog();
+    expect(within(welcome).getByText('Not set')).toBeInTheDocument();
+    const choose = within(welcome).getByRole('button', { name: 'Choose a shortcut' });
+    await waitFor(() => expect(choose).toHaveFocus());
+    expect(within(welcome).getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    await user.click(choose);
+    const box = within(welcome).getByRole('textbox', { name: /Press the new activation shortcut/ });
+    await waitFor(() => expect(box).toHaveFocus());
+    // Guidance explains the rule without recommending a particular combination.
+    expect(within(welcome).getByText(/Hold two of Ctrl, Alt, Shift or Win/).textContent).not.toMatch(/\+/);
+
+    // Taken by another app: reported, and still listening for another try.
+    await user.keyboard('{Control>}{Alt>}k{/Alt}{/Control}');
+    expect(await within(welcome).findByText(/Ctrl\+Alt\+K is already in use/)).toBeInTheDocument();
+    expect(box).toHaveFocus();
+
+    await user.keyboard('{Control>}{Shift>}j{/Shift}{/Control}');
+    expect(await within(welcome).findByText(/Saved. Press Ctrl\+Shift\+J/)).toBeInTheDocument();
+    await user.click(within(welcome).getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Welcome to Sparkwell' })).not.toBeInTheDocument());
+    expect(calls('finish_onboarding')).toHaveLength(1);
+    await waitFor(() => expect(screen.getByLabelText('What are you trying to accomplish?')).toHaveFocus());
+  });
+
+  it('can be skipped, and Sparkwell stays fully usable without a shortcut', async () => {
+    mock.reset({ firstRun: true });
+    const user = userEvent.setup();
+    render(<App />);
+    const welcome = await welcomeDialog();
+    await user.click(within(welcome).getByRole('button', { name: 'Skip for now' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Welcome to Sparkwell' })).not.toBeInTheDocument());
+    expect(calls('finish_onboarding')).toHaveLength(1);
+    expect(calls('set_hotkey')).toHaveLength(0);
+    // A skipped shortcut is not a problem to nag about.
+    expect(screen.queryByRole('button', { name: 'Choose a shortcut' })).not.toBeInTheDocument();
+
+    await searchFor(user, 'I need AI to help me build an MCP server.');
+    expect(within(await screen.findByRole('article')).getByText('MCP Server Architect')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).getByText('Not set')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Set shortcut' })).toBeInTheDocument();
+  });
+
+  it('Escape hides the panel without skipping the welcome', async () => {
+    mock.reset({ firstRun: true });
+    const user = userEvent.setup();
+    render(<App />);
+    await welcomeDialog();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(calls('hide_panel')).toHaveLength(1));
+    expect(calls('finish_onboarding')).toHaveLength(0);
+  });
+
+  it('says so when the saved shortcut could not be registered at startup', async () => {
+    mock.setHotkeyStatus({
+      accelerator: 'Ctrl+Alt+Space',
+      registered: false,
+      error: 'Ctrl+Alt+Space is already in use by another app or by Windows. Try a different combination.',
+    });
+    const user = await renderApp();
+    const notice = screen.getByRole('alert');
+    expect(notice).toHaveTextContent(/Ctrl\+Alt\+Space is already in use.*tray icon/);
+
+    await user.click(within(notice).getByRole('button', { name: 'Choose a shortcut' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('textbox', { name: /Press the new activation shortcut/ })).toHaveFocus(),
+    );
+    await user.keyboard('{Control>}{Shift>}j{/Shift}{/Control}');
+    await within(dialog).findByText(/Saved. Press Ctrl\+Shift\+J/);
+    await user.click(within(dialog).getByRole('button', { name: 'Close settings' }));
+    await waitFor(() => expect(screen.queryByText(/is already in use/)).not.toBeInTheDocument());
   });
 });

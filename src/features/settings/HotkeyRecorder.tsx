@@ -7,6 +7,10 @@ import type { HotkeyStatus } from '../../services/types';
 interface HotkeyRecorderProps {
   hotkey: HotkeyStatus;
   onChange: (hotkey: HotkeyStatus) => void;
+  /** Label for the button that starts recording when no shortcut is set. */
+  setLabel?: string;
+  /** The start button is where focus goes when the surrounding overlay opens. */
+  autoFocus?: boolean;
 }
 
 type Message = { tone: 'success' | 'error'; text: string } | null;
@@ -24,13 +28,14 @@ function Keycaps({ accelerator }: { accelerator: string }) {
 }
 
 /** Click Change -> press a combination -> validated and registered by the core. */
-export function HotkeyRecorder({ hotkey, onChange }: HotkeyRecorderProps) {
+export function HotkeyRecorder({ hotkey, onChange, setLabel = 'Set shortcut', autoFocus = false }: HotkeyRecorderProps) {
   const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [held, setHeld] = useState<Modifier[]>([]);
   const [message, setMessage] = useState<Message>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const capturingRef = useRef(false);
+  const isSet = hotkey.accelerator !== '';
 
   const start = async () => {
     setMessage(null);
@@ -50,6 +55,8 @@ export function HotkeyRecorder({ hotkey, onChange }: HotkeyRecorderProps) {
     capturingRef.current = false;
     setCapturing(false);
     setHeld([]);
+    // A cancelled attempt leaves nothing behind (no stale error or success).
+    setMessage(null);
     try {
       onChange(await api.endHotkeyCapture());
     } catch {
@@ -128,7 +135,7 @@ export function HotkeyRecorder({ hotkey, onChange }: HotkeyRecorderProps) {
           </div>
         ) : (
           <div className="hotkey-current">
-            <Keycaps accelerator={hotkey.accelerator} />
+            {isSet ? <Keycaps accelerator={hotkey.accelerator} /> : <span className="hotkey-unset">Not set</span>}
           </div>
         )}
         {capturing ? (
@@ -136,13 +143,21 @@ export function HotkeyRecorder({ hotkey, onChange }: HotkeyRecorderProps) {
             Cancel
           </button>
         ) : (
-          <button type="button" className="button" onClick={() => void start()}>
-            Change
+          <button
+            type="button"
+            className={`button${isSet ? '' : ' is-ice'}`}
+            data-autofocus={autoFocus || undefined}
+            onClick={() => void start()}
+          >
+            {isSet ? 'Change' : setLabel}
           </button>
         )}
       </div>
       {capturing && !message && (
-        <p className="setting-note">Use two modifiers with a letter, e.g. Ctrl+Alt+Space. Esc cancels.</p>
+        <p className="setting-note">
+          Hold two of Ctrl, Alt, Shift or Win and press a letter, number or Space. Pick one you don't use in other apps.
+          Esc cancels.
+        </p>
       )}
       {!capturing && !message && !hotkey.registered && hotkey.error && (
         <p className="setting-note is-error" role="alert">

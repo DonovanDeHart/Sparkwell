@@ -107,6 +107,7 @@ export const api = {
   hidePanel: () => call<void>('hide_panel'),
   quitApp: () => call<void>('quit_app'),
   setHotkey: (accelerator: string) => call<HotkeyStatus>('set_hotkey', { accelerator }),
+  finishOnboarding: () => call<boolean>('finish_onboarding'),
   beginHotkeyCapture: () => call<void>('begin_hotkey_capture'),
   endHotkeyCapture: () => call<HotkeyStatus>('end_hotkey_capture'),
   setLaunchAtStartup: (enabled: boolean) => call<boolean>('set_launch_at_startup', { enabled }),
