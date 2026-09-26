@@ -29,6 +29,7 @@
         "skipTaskbar": true,
         "alwaysOnTop": false,
         "focus": false,
+        "generalAutofillEnabled": false,
         "center": false,
         "dragDropEnabled": false
       }

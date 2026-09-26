@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { NO_AUTOFILL } from '../../components/fields';
 import { Icon } from '../../components/Icon';
 import { IconButton } from '../../components/IconButton';
 import { Toggle } from '../../components/Toggle';
@@ -270,6 +271,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                 className="textarea editor-body selectable"
                 value={draft.body}
                 spellCheck={false}
+                {...NO_AUTOFILL}
                 placeholder="Paste or write the full Spark — the prompt, workflow, role, or instructions you want to reuse."
                 onChange={(e) => update({ body: e.target.value })}
               />
@@ -324,6 +326,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                 id="spark-title"
                 className="input"
                 value={draft.title}
+                {...NO_AUTOFILL}
                 maxLength={120}
                 placeholder="Name it by what it does — e.g. MCP Server Architect"
                 onChange={(e) => update({ title: e.target.value })}
@@ -338,6 +341,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                 id="spark-summary"
                 className="textarea"
                 rows={2}
+                {...NO_AUTOFILL}
                 maxLength={600}
                 value={draft.summary}
                 placeholder="What does this Spark help you accomplish?"
@@ -371,6 +375,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                   id="spark-tags"
                   className="tag-input-field"
                   value={tagText}
+                  {...NO_AUTOFILL}
                   disabled={draft.tags.length >= MAX_TAGS}
                   placeholder={draft.tags.length ? '' : 'e.g. MCP, Architecture'}
                   onChange={(e) => setTagText(e.target.value)}

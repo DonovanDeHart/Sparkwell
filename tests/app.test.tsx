@@ -224,6 +224,18 @@ describe('Add New Spark', () => {
     expect(within(card).getByText('Kubernetes Doctor')).toBeInTheDocument();
   });
 
+  it('never offers browser autofill in any field', async () => {
+    const user = await renderApp();
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    await screen.findByRole('dialog', { name: 'Add New Spark' });
+    const fields = document.querySelectorAll('input:not([type="checkbox"]), textarea');
+    expect(fields.length).toBeGreaterThanOrEqual(5);
+    fields.forEach((field) => {
+      expect(field, field.id).toHaveAttribute('autocomplete', 'off');
+      expect(field, field.id).toHaveAttribute('autocapitalize', 'off');
+    });
+  });
+
   it('requires the Spark body', async () => {
     const user = await renderApp();
     await user.click(screen.getByRole('button', { name: /Add New Spark/ }));

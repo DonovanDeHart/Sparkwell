@@ -1,5 +1,6 @@
 import { useLayoutEffect, type RefObject } from 'react';
 import { Icon } from '../../components/Icon';
+import { NO_AUTOFILL } from '../../components/fields';
 
 interface GoalInputProps {
   value: string;
@@ -54,7 +55,7 @@ export function GoalInput({ value, onChange, onSubmit, inputRef, disabled, hasRe
           maxLength={2000}
           disabled={disabled}
           spellCheck={false}
-          autoComplete="off"
+          {...NO_AUTOFILL}
           placeholder="e.g. I need AI to help me build an MCP server"
           aria-describedby="goal-hint"
           onChange={(e) => onChange(e.target.value)}
