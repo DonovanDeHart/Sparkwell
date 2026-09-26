@@ -1,0 +1,73 @@
+/* Fire & Ice design tokens (UI/UX spec section 7). Values are starting
+   points tuned against the canonical references; legibility wins over exact
+   hex matching. Type sizes are rem so Windows text scaling is honoured. */
+
+:root {
+  /* Foundation */
+  --bg-0: #080d13;
+  --bg-1: #0d141c;
+  --panel: #111922;
+  --panel-raised: #151e28;
+  --field: #111a23;
+  --row: #141c25;
+  --row-hover: #18212c;
+
+  /* Lines */
+  --border: #2a3542;
+  --border-soft: rgba(255, 255, 255, 0.065);
+  --border-row: #232d39;
+  --divider: rgba(255, 255, 255, 0.06);
+
+  /* Ice: retrieval, focus, trust, precision */
+  --ice: #54ddeb;
+  --ice-soft: #8edff2;
+  --ice-deep: #1f9fb5;
+  --ice-wash: rgba(84, 221, 235, 0.1);
+  --ice-line: rgba(84, 221, 235, 0.35);
+
+  /* Fire: Sparks, copy, creation, favorites */
+  --fire: #f39a3d;
+  --fire-gold: #f0b24c;
+  --fire-text: #f6ad55;
+  --fire-wash: rgba(243, 154, 61, 0.12);
+  --fire-line: rgba(240, 170, 72, 0.72);
+
+  /* Text */
+  --text: #f3f4f6;
+  --text-2: #b8c0cc;
+  --muted: #7b8491;
+  --danger: #ff7a70;
+  --danger-wash: rgba(255, 122, 112, 0.1);
+  --success: #7ee2b8;
+
+  /* Shape */
+  --r-panel: 8px; /* matches the Windows 11 window corner */
+  --r-card: 16px;
+  --r-field: 13px;
+  --r-button: 11px;
+  --r-row: 10px;
+  --r-chip: 7px;
+
+  /* Spacing */
+  --gutter: 18px;
+  --gap: 16px;
+  --header-h: 60px;
+
+  /* Type */
+  --font: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, 'Inter', sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, 'SF Mono', ui-monospace, monospace;
+  --fs-2xs: 0.6875rem; /* 11px */
+  --fs-xs: 0.75rem; /* 12px */
+  --fs-sm: 0.8125rem; /* 13px */
+  --fs-body: 0.84375rem; /* 13.5px */
+  --fs-row: 0.90625rem; /* 14.5px */
+  --fs-md: 0.9375rem; /* 15px */
+  --fs-lg: 1.09375rem; /* 17.5px */
+  --fs-brand: 1.25rem; /* 20px */
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast: 120ms;
+  --t-med: 200ms;
+}

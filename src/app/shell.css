@@ -1,0 +1,315 @@
+/* The window is the panel: Windows draws its rounded corners, border and
+   shadow, and (where supported) the frosted acrylic backdrop behind it. */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+}
+
+.panel {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  /* Opaque unless frosted glass is on (older Windows, transparency effects
+     turned off): desktop icons must never show through as ghosts. */
+  background:
+    radial-gradient(120% 38% at 0% 0%, rgba(84, 221, 235, 0.055), transparent 70%),
+    radial-gradient(90% 30% at 100% 100%, rgba(243, 154, 61, 0.05), transparent 70%),
+    linear-gradient(180deg, #131b24 0%, #0c1219 45%, #090e14 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+/* Frosted glass: the Windows acrylic backdrop (blurred, never sharp) shows
+   through a dark tint. */
+:root[data-glass] .panel {
+  background:
+    radial-gradient(120% 38% at 0% 0%, rgba(84, 221, 235, 0.07), transparent 70%),
+    radial-gradient(90% 30% at 100% 100%, rgba(243, 154, 61, 0.06), transparent 70%),
+    linear-gradient(180deg, rgba(19, 27, 36, 0.74) 0%, rgba(12, 18, 25, 0.8) 45%, rgba(9, 14, 20, 0.84) 100%);
+}
+
+.panel.is-entering {
+  animation: panel-in 170ms var(--ease-out);
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------------------ Header --- */
+
+.header {
+  flex: none;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 var(--gutter);
+  border-bottom: 1px solid var(--divider);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.brand .logo-mark {
+  flex: none;
+  filter: drop-shadow(0 0 7px rgba(84, 221, 235, 0.45));
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-size: var(--fs-brand);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.wordmark-spark {
+  color: var(--text);
+}
+
+.wordmark-well {
+  color: #9aa6b4;
+  font-weight: 500;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* -------------------------------------------------------------- Body --- */
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.main {
+  flex: 1;
+  min-height: 0;
+  padding: 18px var(--gutter) 14px;
+}
+
+.dock {
+  flex: none;
+  padding: 12px var(--gutter);
+  border-top: 1px solid var(--divider);
+  background: linear-gradient(180deg, rgba(12, 18, 25, 0.6), rgba(10, 15, 21, 0.9));
+}
+
+.footer {
+  flex: none;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 var(--gutter);
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.footer-status {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.footer-local {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ice);
+  box-shadow: 0 0 8px var(--ice);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ---------------------------------------------------------- Overlays --- */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  /* Opaque: overlays replace the view beneath them rather than layering
+     translucent text over text (backdrop blur is unreliable across webviews). */
+  background:
+    radial-gradient(110% 30% at 0% 0%, rgba(84, 221, 235, 0.04), transparent 70%),
+    linear-gradient(180deg, #111922 0%, #0c1219 100%);
+  animation: overlay-in 200ms var(--ease-out);
+}
+
+/* Overlays take focus as a whole so Esc reaches them; no ring for that. */
+.overlay:focus {
+  outline: none;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.overlay-head {
+  flex: none;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.overlay-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.overlay-content {
+  flex: 1;
+  min-height: 0;
+  padding: 16px var(--gutter) 18px;
+}
+
+.overlay-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px var(--gutter);
+  border-top: 1px solid var(--divider);
+}
+
+/* ------------------------------------------------------------- Toast --- */
+
+.toast-region {
+  position: absolute;
+  left: var(--gutter);
+  right: var(--gutter);
+  bottom: 84px;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 100%;
+  padding: 9px 12px 9px 11px;
+  border-radius: 11px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: rgba(18, 27, 36, 0.97);
+  border: 1px solid rgba(84, 221, 235, 0.28);
+  box-shadow: 0 12px 30px -8px rgba(0, 0, 0, 0.6), 0 0 18px -8px rgba(84, 221, 235, 0.5);
+  animation: toast-in 180ms var(--ease-out);
+}
+
+.toast .icon {
+  color: var(--ice);
+}
+
+.toast.is-error {
+  border-color: rgba(255, 122, 112, 0.45);
+  box-shadow: 0 12px 30px -8px rgba(0, 0, 0, 0.6);
+}
+
+.toast.is-error .icon {
+  color: var(--danger);
+}
+
+.toast-text {
+  min-width: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  /* Up to two lines: long Spark titles stay readable. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.toast-action {
+  flex: none;
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: var(--ice);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+}
+
+.toast-action:hover {
+  background: var(--ice-wash);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .panel,
+  .overlay,
+  .toast {
+    border: 1px solid CanvasText;
+  }
+}

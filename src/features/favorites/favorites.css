@@ -1,0 +1,143 @@
+.favorites {
+  margin-top: 22px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+
+.section-count {
+  font-family: var(--font);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.spark-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.spark-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 42px;
+  border-radius: var(--r-row);
+  background: var(--row);
+  border: 1px solid var(--border-row);
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.spark-row:hover {
+  background: var(--row-hover);
+  border-color: #2f3b4a;
+}
+
+.spark-row.is-copied {
+  border-color: rgba(84, 221, 235, 0.45);
+  box-shadow: 0 0 16px -8px rgba(84, 221, 235, 0.7);
+}
+
+.row-star {
+  flex: none;
+  width: 36px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--fire);
+  border-radius: var(--r-row) 0 0 var(--r-row);
+}
+
+.row-star .icon {
+  filter: drop-shadow(0 0 5px rgba(243, 154, 61, 0.35));
+  transition: transform var(--t-fast);
+}
+
+.row-star:hover .icon {
+  transform: scale(1.12);
+}
+
+.row-star.is-off {
+  color: #5d6773;
+}
+
+.row-star.is-off .icon {
+  filter: none;
+}
+
+.row-copy {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px 0 2px;
+  text-align: left;
+  border-radius: 0 var(--r-row) var(--r-row) 0;
+}
+
+.row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-row);
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-copy-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #8a949f;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  transition: color var(--t-fast);
+}
+
+.row-copy:hover .row-copy-icon {
+  color: var(--text);
+}
+
+.spark-row.is-copied .row-copy-icon {
+  color: var(--ice);
+}
+
+.row-copy:focus-visible {
+  outline-offset: -2px;
+}
+
+.favorites-empty {
+  padding: 13px 14px;
+  border-radius: var(--r-row);
+  border: 1px dashed #2c3744;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  display: flex;
+  gap: 9px;
+  align-items: center;
+}
+
+.favorites-empty .icon {
+  color: var(--fire);
+}
