@@ -1,10 +1,11 @@
 //! Semantic retrieval regression suite (runs in CI, no Ollama needed).
 //!
-//! Replays embeddings recorded from the real model used in physical acceptance
-//! testing (qwen3-embedding:0.6b) through the production pipeline: retrieval
-//! profiles, model-aware query formatting, hubness/scale calibration, lexical
-//! fusion and the Best Match decision. Any change that degrades intent
-//! retrieval — or labels a wrong Spark as a confident Best Match — fails here.
+//! Replays embeddings recorded from Sparkwell's canonical model
+//! (qwen3-embedding:8b-q8_0) through the production pipeline: labelled
+//! retrieval profiles, the Qwen3 query instruction, hubness/scale
+//! calibration, lexical fusion and the Best Match decision. Any change that
+//! degrades intent retrieval — or labels a wrong Spark as a confident Best
+//! Match — fails here.
 //!
 //! If the profile recipe, query formatting, or calibration goals change, the
 //! recorded texts no longer match: re-record on a machine with the model via
@@ -14,9 +15,10 @@ mod support;
 
 use std::collections::HashMap;
 
+use sparkwell_lib::ai::models::CANONICAL_EMBED_MODEL;
 use support::*;
 
-const RECORDED_MODEL: &str = "qwen3-embedding:0.6b";
+const RECORDED_MODEL: &str = CANONICAL_EMBED_MODEL;
 
 fn recorded() -> HashMap<String, Vec<f32>> {
     let path = fixture_path(RECORDED_MODEL);
@@ -35,13 +37,15 @@ fn recorded() -> HashMap<String, Vec<f32>> {
 }
 
 #[test]
-fn acceptance_goals_find_the_right_spark() {
+fn goals_find_the_right_spark() {
     let vectors = recorded();
-    let dir = tempfile::tempdir().unwrap();
-    let lib = acceptance_library(dir.path());
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let lib = acceptance_library(a.path());
     let texts = document_texts(&lib, RECORDED_MODEL);
+    let (user_lib, user_ids) = user_library(b.path());
+    let user_texts = document_texts(&user_lib, RECORDED_MODEL);
 
-    let missing: Vec<String> = every_text(&texts, RECORDED_MODEL)
+    let missing: Vec<String> = union_texts(&[&texts, &user_texts], RECORDED_MODEL)
         .into_iter()
         .filter(|t| !vectors.contains_key(&text_key(t)))
         .map(|t| t.chars().take(80).collect())
@@ -55,42 +59,62 @@ fn acceptance_goals_find_the_right_spark() {
 
     let embed = |t: &str| vectors[&text_key(t)].clone();
     let index = build_index(RECORDED_MODEL, &texts, &embed);
-    let report = evaluate(&lib, &index, RECORDED_MODEL, &embed);
+    let mut report = evaluate(&lib, &index, RECORDED_MODEL, &embed);
+    let user_index = build_index(RECORDED_MODEL, &user_texts, &embed);
+    evaluate_user(
+        &mut report,
+        &user_lib,
+        &user_ids,
+        &user_index,
+        RECORDED_MODEL,
+        &embed,
+    );
     report.print();
 
-    let acc = &report.acceptance;
-    // Round 1 baseline: 6 correct / 3 acceptable / 3 incorrect (1 confidently wrong).
-    assert_eq!(
-        Report::count(acc, Grade::ConfidentlyWrong),
-        0,
-        "a wrong Spark was shown as the Best Match"
-    );
-    assert_eq!(
-        Report::count(acc, Grade::Missed),
-        0,
-        "an acceptance goal's Spark wasn't shown at all"
-    );
-    assert!(
-        Report::count(acc, Grade::Correct) >= 9,
-        "only {} of 12 acceptance goals got the expected Best Match",
-        Report::count(acc, Grade::Correct)
-    );
-    let dev = &report.dev;
-    assert_eq!(
-        Report::count(dev, Grade::ConfidentlyWrong),
-        0,
-        "a wrong Spark was shown as the Best Match"
-    );
-    assert!(
-        Report::count(dev, Grade::Correct) >= 26,
-        "only {} of {} paraphrased goals got the expected Best Match",
-        Report::count(dev, Grade::Correct),
-        dev.len()
-    );
+    // Zero confidently wrong Best Matches anywhere comes first.
+    for (label, list) in [
+        ("acceptance", &report.acceptance),
+        ("dev", &report.dev),
+        ("held-out", &report.heldout),
+        ("test", &report.test),
+        ("user-added", &report.premium),
+        ("acceptance+user", &report.acceptance_with_user),
+    ] {
+        assert_eq!(
+            Report::count(list, Grade::ConfidentlyWrong),
+            0,
+            "a wrong Spark was shown as the Best Match ({label})"
+        );
+    }
     assert!(
         report.false_confident.is_empty(),
-        "unrelated goals shown as a confident match"
+        "unrelated goals shown as a confident match: {:?}",
+        report.false_confident
     );
+
+    // Then how often the right Spark is the confident answer, and that it is
+    // always offered. Floors are the results recorded for this calibration.
+    let floors = [
+        ("acceptance", &report.acceptance, 8, 0),
+        ("dev", &report.dev, 26, 0),
+        ("held-out", &report.heldout, 10, 1),
+        ("test", &report.test, 10, 0),
+        ("user-added", &report.premium, 10, 0),
+        ("acceptance+user", &report.acceptance_with_user, 7, 0),
+    ];
+    for (label, list, correct, missed) in floors {
+        assert!(
+            Report::count(list, Grade::Correct) >= correct,
+            "{label}: only {} of {} goals got the expected Best Match",
+            Report::count(list, Grade::Correct),
+            list.len()
+        );
+        assert!(
+            Report::count(list, Grade::Missed) <= missed,
+            "{label}: {} goals didn't offer the expected Spark at all",
+            Report::count(list, Grade::Missed)
+        );
+    }
 }
 
 #[test]
