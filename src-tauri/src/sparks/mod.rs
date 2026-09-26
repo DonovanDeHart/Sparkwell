@@ -522,6 +522,25 @@ pub fn all_ids(lib: &Library) -> AppResult<Vec<i64>> {
     Ok(ids)
 }
 
+/// Number of Sparks whose indexed text contains `term` (prefix match). Used to
+/// weight query words by how rare they are in this library.
+pub fn document_frequency(lib: &Library, term: &str) -> AppResult<i64> {
+    let token: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
+    if token.is_empty() {
+        return Ok(0);
+    }
+    // Alphanumeric only, so quoting is injection-safe.
+    let expr = if token.chars().count() >= 3 {
+        format!("\"{token}\"*")
+    } else {
+        format!("\"{token}\"")
+    };
+    let mut stmt = lib
+        .conn
+        .prepare_cached("SELECT COUNT(*) FROM sparks_fts WHERE sparks_fts MATCH ?1")?;
+    Ok(stmt.query_row([expr], |r| r.get(0))?)
+}
+
 /// Full-text candidates as (id, bm25) where lower bm25 is better.
 pub fn fts_candidates(lib: &Library, fts_query: &str, limit: usize) -> AppResult<Vec<(i64, f64)>> {
     if fts_query.is_empty() {

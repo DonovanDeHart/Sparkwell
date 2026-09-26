@@ -2,8 +2,11 @@
 //! ready), fused into one decisive Best Match.
 //!
 //! Scores are internal ranking signals only. The UI shows qualitative states
-//! (Best Match / no strong match), never a fabricated percentage.
+//! (Best Match / no strong match) and which retrieval mode produced them, never
+//! a fabricated percentage.
 
+pub mod pool;
+pub mod profile;
 pub mod text;
 pub mod vectors;
 
@@ -17,9 +20,9 @@ use crate::storage::Library;
 use text::{fts_query, is_stopword, query_terms, stem, tokenize, tokens_match};
 use vectors::VectorIndex;
 
-/// Minimum fused score for a confident Best Match.
+/// Standard mode: minimum score for a confident Best Match.
 pub const STRONG_MATCH: f64 = 0.42;
-/// Minimum score for a Spark to be offered as a "closest" candidate.
+/// Standard mode: minimum score for a Spark to be offered as a "closest" candidate.
 pub const CANDIDATE_MIN: f64 = 0.10;
 const FTS_CANDIDATES: usize = 50;
 const SEMANTIC_CANDIDATES: usize = 20;
@@ -27,25 +30,31 @@ const MAX_ALTERNATIVES: usize = 3;
 /// Only the start of very long bodies is scanned for lexical coverage; the
 /// full body is still indexed by FTS for recall.
 const BODY_SCAN_CHARS: usize = 20_000;
-/// Semantic evidence is measured as a z-score against the library's own
-/// similarity distribution for the query, so it is independent of each
-/// embedding model's absolute cosine range. Calibrated against live
-/// nomic-embed-text runs (tests/semantic_live.rs): clear matches sit around
-/// 2 standard deviations above the mean, unrelated Sparks near 0.
-const SEM_Z_ZERO: f32 = 0.5;
-const SEM_Z_FULL: f32 = 2.0;
-/// Floor for the spread so near-identical libraries don't explode z-scores.
-const SEM_MIN_STD: f32 = 0.02;
-/// Below this many vectors the distribution is too thin to trust.
-const SEM_MIN_VECTORS: usize = 5;
-/// Two different Sparks this close together are an ambiguous result: offer
-/// both instead of pretending to know which one the user meant. The z-score
-/// normalisation amplifies small cosine differences (a 0.2 sigma lead is ~0.08
-/// here), so the margin is deliberately generous.
+/// Standard mode: two different Sparks this close together are an ambiguous
+/// result, so both are offered instead of pretending to know which was meant.
 const AMBIGUITY_MARGIN: f64 = 0.10;
-/// Above this the top result is decisive even if another Spark is close
-/// (e.g. an exact title typed as the goal).
+/// Standard mode: above this the top result is decisive even if another Spark
+/// is close (e.g. an exact title typed as the goal).
 const DECISIVE_MATCH: f64 = 0.8;
+
+/// Semantic mode: fused = SEM_WEIGHT · semantic + LEX_WEIGHT · lexical, where
+/// lexical terms are weighted by how rare they are in the library so a shared
+/// common word ("research", "sources") can't outvote meaning.
+const SEM_WEIGHT: f64 = 0.6;
+const LEX_WEIGHT: f64 = 0.4;
+/// Sparks not embedded yet (brief, while indexing) compete on words alone.
+const UNINDEXED_FACTOR: f64 = 0.85;
+/// Semantic mode confidence. Calibrated on the physical acceptance library
+/// (tests/semantic_regression.rs) in the middle of the range where no known
+/// goal gets a confidently wrong answer (T 0.22–0.38, M 0.12–0.14 all hold).
+const SEM_STRONG: f64 = 0.30;
+const SEM_MARGIN: f64 = 0.12;
+const SEM_CANDIDATE_MIN: f64 = 0.10;
+/// Two leading Sparks whose purposes are this alike are interchangeable for
+/// the goal, so a narrow lead between them isn't treated as ambiguity.
+const SAME_PURPOSE: f32 = 0.85;
+/// Purpose similarity is precomputed for this many leading semantic candidates.
+const PURPOSE_CANDIDATES: usize = 12;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +63,23 @@ pub enum SearchMode {
     Semantic,
     /// Lexical/title/tag/full-text only.
     Standard,
+}
+
+/// Why a search used standard retrieval instead of local intelligence. The UI
+/// always labels standard results so the mode never changes silently.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Fallback {
+    /// Ollama isn't running (or hasn't been detected yet).
+    Offline,
+    /// Ollama is running but no local embedding model is installed.
+    NoEmbeddingModel,
+    /// The library is still being indexed for local intelligence.
+    Indexing,
+    /// The embedding model didn't answer within the time budget.
+    TimedOut,
+    /// Local intelligence answered with an error.
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -69,6 +95,8 @@ pub enum Confidence {
 pub struct SearchOutcome {
     pub query: String,
     pub mode: SearchMode,
+    /// Present in standard mode: why local intelligence wasn't used.
+    pub fallback: Option<Fallback>,
     pub confidence: Confidence,
     /// The single recommendation. Present only for a strong match.
     pub best: Option<SparkSummary>,
@@ -87,43 +115,74 @@ pub struct Scored {
     usage: i64,
 }
 
-/// Semantic evidence for a query: cosine per Spark plus the distribution the
-/// cosines came from.
+/// Semantic evidence for one query, ready for fusion.
 pub struct SemanticScores {
-    cosines: HashMap<i64, f32>,
-    mean: f32,
-    std: f32,
+    scores: HashMap<i64, f64>,
+    purpose: HashMap<(i64, i64), f32>,
+}
+
+fn pair_key(a: i64, b: i64) -> (i64, i64) {
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 impl SemanticScores {
-    /// Returns `None` when there is not enough indexed material for semantic
-    /// evidence to be meaningful; callers then use standard retrieval.
+    /// Returns `None` when the index can't provide trustworthy evidence
+    /// (not enough indexed Sparks, no generic pool, wrong dimensions).
     pub fn from_index(index: &VectorIndex, query_vector: &[f32]) -> Option<SemanticScores> {
-        let sims = index.similarities(query_vector);
-        if sims.len() < SEM_MIN_VECTORS {
+        let mut evidence = index.evidence(query_vector);
+        if evidence.is_empty() {
             return None;
         }
-        let n = sims.len() as f32;
-        let mean = sims.iter().map(|(_, c)| *c).sum::<f32>() / n;
-        let variance = sims.iter().map(|(_, c)| (c - mean).powi(2)).sum::<f32>() / n;
+        evidence.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.id.cmp(&b.id))
+        });
+        let lead: Vec<i64> = evidence
+            .iter()
+            .take(PURPOSE_CANDIDATES)
+            .map(|e| e.id)
+            .collect();
+        let mut purpose = HashMap::new();
+        for (i, a) in lead.iter().enumerate() {
+            for b in &lead[i + 1..] {
+                if let Some(s) = index.purpose_similarity(*a, *b) {
+                    purpose.insert(pair_key(*a, *b), s);
+                }
+            }
+        }
         Some(SemanticScores {
-            cosines: sims.into_iter().collect(),
-            mean,
-            std: variance.sqrt().max(SEM_MIN_STD),
+            scores: evidence.into_iter().map(|e| (e.id, e.score)).collect(),
+            purpose,
         })
     }
 
-    /// 0 for a typical (unrelated) Spark, 1 for a Spark that stands out
-    /// clearly from the rest of the library.
+    /// Test/support constructor from explicit scores.
+    pub fn from_scores(scores: HashMap<i64, f64>, purpose: HashMap<(i64, i64), f32>) -> Self {
+        let purpose = purpose
+            .into_iter()
+            .map(|((a, b), s)| (pair_key(a, b), s))
+            .collect();
+        SemanticScores { scores, purpose }
+    }
+
     fn normalized(&self, id: i64) -> Option<f64> {
-        self.cosines.get(&id).map(|c| {
-            let z = (c - self.mean) / self.std;
-            ((z - SEM_Z_ZERO) / (SEM_Z_FULL - SEM_Z_ZERO)).clamp(0.0, 1.0) as f64
-        })
+        self.scores.get(&id).copied()
+    }
+
+    fn same_purpose(&self, a: i64, b: i64) -> bool {
+        self.purpose
+            .get(&pair_key(a, b))
+            .is_some_and(|s| *s >= SAME_PURPOSE)
     }
 
     fn top_ids(&self, n: usize) -> Vec<i64> {
-        let mut all: Vec<(i64, f32)> = self.cosines.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut all: Vec<(i64, f64)> = self.scores.iter().map(|(k, v)| (*k, *v)).collect();
         all.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -142,8 +201,13 @@ fn any_match(term: &str, tokens: &[String]) -> bool {
 }
 
 /// Field-weighted coverage of the query terms, blended with how much of the
-/// title the query covers. Range 0..=1.
-pub fn lexical_score(terms: &[String], doc: &SearchDoc) -> f64 {
+/// title the query covers. Range 0..=1. With `weights`, each term counts in
+/// proportion to its rarity in the library.
+pub fn lexical_score(
+    terms: &[String],
+    doc: &SearchDoc,
+    weights: Option<&HashMap<String, f64>>,
+) -> f64 {
     if terms.is_empty() {
         return 0.0;
     }
@@ -153,23 +217,23 @@ pub fn lexical_score(terms: &[String], doc: &SearchDoc) -> f64 {
     let body_head: String = doc.body.chars().take(BODY_SCAN_CHARS).collect();
     let body = stemmed_tokens(&body_head);
 
-    let covered: f64 = terms
-        .iter()
-        .map(|term| {
-            if any_match(term, &title) {
-                1.0
-            } else if any_match(term, &tags) {
-                0.85
-            } else if any_match(term, &summary) {
-                0.55
-            } else if any_match(term, &body) {
-                0.25
-            } else {
-                0.0
-            }
-        })
-        .sum();
-    let coverage = covered / terms.len() as f64;
+    let (mut covered, mut total) = (0.0, 0.0);
+    for term in terms {
+        let w = weights.and_then(|w| w.get(term)).copied().unwrap_or(1.0);
+        total += w;
+        covered += w * if any_match(term, &title) {
+            1.0
+        } else if any_match(term, &tags) {
+            0.85
+        } else if any_match(term, &summary) {
+            0.55
+        } else if any_match(term, &body) {
+            0.25
+        } else {
+            0.0
+        };
+    }
+    let coverage = if total > 0.0 { covered / total } else { 0.0 };
 
     let title_content: Vec<String> = tokenize(&doc.title)
         .into_iter()
@@ -184,6 +248,17 @@ pub fn lexical_score(terms: &[String], doc: &SearchDoc) -> f64 {
     };
 
     0.8 * coverage + 0.2 * title_recall
+}
+
+/// Rarity weight per query term: ln(1 + N / (1 + documents containing it)).
+pub fn term_weights(lib: &Library, terms: &[String]) -> AppResult<HashMap<String, f64>> {
+    let n = lib.spark_count()?.max(1) as f64;
+    let mut out = HashMap::new();
+    for term in terms {
+        let df = sparks::document_frequency(lib, term)? as f64;
+        out.insert(term.clone(), (1.0 + n / (1.0 + df)).ln());
+    }
+    Ok(out)
 }
 
 /// Light, bounded preference for Sparks the user relies on. Never large enough
@@ -206,6 +281,7 @@ pub fn rank(
     query: &str,
     docs: &[SearchDoc],
     semantic: Option<&SemanticScores>,
+    weights: Option<&HashMap<String, f64>>,
     now_ms: i64,
 ) -> Vec<Scored> {
     let terms = query_terms(query);
@@ -213,10 +289,15 @@ pub fn rank(
     let mut scored: Vec<Scored> = docs
         .iter()
         .map(|doc| {
-            let lexical = lexical_score(&terms, doc);
-            let mut base = match semantic.and_then(|s| s.normalized(doc.id)) {
-                Some(sem) => (0.6 * sem + 0.4 * lexical).max(0.85 * lexical),
-                None => lexical,
+            let mut base = match semantic {
+                Some(s) => {
+                    let lexical = lexical_score(&terms, doc, weights);
+                    match s.normalized(doc.id) {
+                        Some(sem) => SEM_WEIGHT * sem + LEX_WEIGHT * lexical,
+                        None => UNINDEXED_FACTOR * lexical,
+                    }
+                }
+                None => lexical_score(&terms, doc, None),
             };
             if !query_tokens.is_empty() && tokenize(&doc.title) == query_tokens {
                 base = base.max(0.95);
@@ -241,16 +322,54 @@ pub fn rank(
     scored
 }
 
-/// Runs retrieval against the library. `semantic` is `None` in standard mode.
+/// How confident the ranking is, and the minimum score for a candidate.
+fn judge(ranked: &[Scored], semantic: Option<&SemanticScores>) -> (Confidence, f64) {
+    let (Some(top), second) = (ranked.first(), ranked.get(1)) else {
+        return (Confidence::None, CANDIDATE_MIN);
+    };
+    let runner_up = second.map(|s| s.base).unwrap_or(0.0);
+    match semantic {
+        Some(sem) => {
+            let interchangeable = second.is_some_and(|s| sem.same_purpose(top.id, s.id));
+            let confidence = if top.base >= SEM_STRONG
+                && (top.base - runner_up >= SEM_MARGIN || interchangeable)
+            {
+                Confidence::Strong
+            } else if top.base >= SEM_CANDIDATE_MIN {
+                Confidence::Weak
+            } else {
+                Confidence::None
+            };
+            (confidence, SEM_CANDIDATE_MIN)
+        }
+        None => {
+            let confidence = if top.base >= STRONG_MATCH
+                && (top.base - runner_up >= AMBIGUITY_MARGIN || top.base >= DECISIVE_MATCH)
+            {
+                Confidence::Strong
+            } else if top.base >= CANDIDATE_MIN {
+                Confidence::Weak
+            } else {
+                Confidence::None
+            };
+            (confidence, CANDIDATE_MIN)
+        }
+    }
+}
+
+/// Runs retrieval against the library. `semantic` is `None` in standard mode,
+/// in which case `fallback` says why.
 pub fn search(
     lib: &Library,
     query: &str,
     semantic: Option<&SemanticScores>,
+    fallback: Option<Fallback>,
     partially_indexed: bool,
     now_ms: i64,
 ) -> AppResult<SearchOutcome> {
     let query = query.trim();
-    if query_terms(query).is_empty() {
+    let terms = query_terms(query);
+    if terms.is_empty() {
         return Err(AppError::Validation(
             "Describe what you're trying to accomplish.".into(),
         ));
@@ -270,7 +389,11 @@ pub fn search(
     }
 
     let docs = sparks::search_docs(lib, &ids)?;
-    let ranked = rank(query, &docs, semantic, now_ms);
+    let weights = match semantic {
+        Some(_) => Some(term_weights(lib, &terms)?),
+        None => None,
+    };
+    let ranked = rank(query, &docs, semantic, weights.as_ref(), now_ms);
     let by_id: HashMap<i64, &SearchDoc> = docs.iter().map(|d| (d.id, d)).collect();
 
     let summary_of = |s: &Scored| -> SparkSummary {
@@ -285,37 +408,32 @@ pub fn search(
         }
     };
 
-    let top = ranked.first();
-    let runner_up = ranked.get(1).map(|s| s.base).unwrap_or(0.0);
-    let confidence = match top {
-        Some(s)
-            if s.base >= STRONG_MATCH
-                && (s.base - runner_up >= AMBIGUITY_MARGIN || s.base >= DECISIVE_MATCH) =>
-        {
-            Confidence::Strong
-        }
-        Some(s) if s.base >= CANDIDATE_MIN => Confidence::Weak,
-        _ => Confidence::None,
-    };
+    let (confidence, candidate_min) = judge(&ranked, semantic);
     let (best, alternatives) = match confidence {
-        Confidence::Strong => (top.map(summary_of), Vec::new()),
+        Confidence::Strong => (ranked.first().map(summary_of), Vec::new()),
         _ => (
             None,
             ranked
                 .iter()
-                .filter(|s| s.base >= CANDIDATE_MIN)
+                .filter(|s| s.base >= candidate_min)
                 .take(MAX_ALTERNATIVES)
                 .map(summary_of)
                 .collect(),
         ),
     };
 
+    let mode = if semantic.is_some() {
+        SearchMode::Semantic
+    } else {
+        SearchMode::Standard
+    };
     Ok(SearchOutcome {
         query: query.to_string(),
-        mode: if semantic.is_some() {
-            SearchMode::Semantic
+        mode,
+        fallback: if semantic.is_some() {
+            None
         } else {
-            SearchMode::Standard
+            Some(fallback.unwrap_or(Fallback::Offline))
         },
         confidence,
         best,
@@ -336,11 +454,12 @@ mod tests {
         lib
     }
 
+    fn standard(lib: &Library, q: &str) -> SearchOutcome {
+        search(lib, q, None, Some(Fallback::Offline), false, 0).unwrap()
+    }
+
     fn best_title(lib: &Library, q: &str) -> Option<String> {
-        search(lib, q, None, false, 0)
-            .unwrap()
-            .best
-            .map(|b| b.title)
+        standard(lib, q).best.map(|b| b.title)
     }
 
     #[test]
@@ -381,6 +500,17 @@ mod tests {
     }
 
     #[test]
+    fn standard_results_always_say_why() {
+        let lib = seeded();
+        let out = search(&lib, "mcp server", None, Some(Fallback::TimedOut), false, 0).unwrap();
+        assert_eq!(out.mode, SearchMode::Standard);
+        assert_eq!(out.fallback, Some(Fallback::TimedOut));
+        // A missing reason is never reported as semantic.
+        let out = search(&lib, "mcp server", None, None, false, 0).unwrap();
+        assert_eq!(out.fallback, Some(Fallback::Offline));
+    }
+
+    #[test]
     fn exact_title_wins() {
         let lib = seeded();
         assert_eq!(
@@ -392,7 +522,7 @@ mod tests {
     #[test]
     fn unrelated_query_is_not_a_confident_match() {
         let lib = seeded();
-        let out = search(&lib, "bake sourdough bread at home", None, false, 0).unwrap();
+        let out = standard(&lib, "bake sourdough bread at home");
         assert_ne!(out.confidence, Confidence::Strong);
         assert!(out.best.is_none());
     }
@@ -400,7 +530,7 @@ mod tests {
     #[test]
     fn empty_library_returns_no_match() {
         let lib = Library::open_in_memory();
-        let out = search(&lib, "build an mcp server", None, false, 0).unwrap();
+        let out = standard(&lib, "build an mcp server");
         assert_eq!(out.confidence, Confidence::None);
         assert!(out.best.is_none());
         assert!(out.alternatives.is_empty());
@@ -410,7 +540,7 @@ mod tests {
     fn empty_query_is_rejected() {
         let lib = seeded();
         assert!(matches!(
-            search(&lib, "   ", None, false, 0),
+            search(&lib, "   ", None, None, false, 0),
             Err(AppError::Validation(_))
         ));
     }
@@ -429,21 +559,14 @@ mod tests {
         )
         .unwrap();
         // Partial evidence (summary + body hits, one term unmatched): weak.
-        let out = search(&lib, "polite budget forecast", None, false, 0).unwrap();
+        let out = standard(&lib, "polite budget forecast");
         assert_eq!(out.confidence, Confidence::Weak);
         assert!(out.best.is_none());
         assert_eq!(out.alternatives.len(), 1);
         assert_eq!(out.alternatives[0].title, "Email Drafter");
 
         // A single body-level hit among many terms is not worth offering.
-        let out = search(
-            &lib,
-            "quarterly budget forecast spreadsheet",
-            None,
-            false,
-            0,
-        )
-        .unwrap();
+        let out = standard(&lib, "quarterly budget forecast spreadsheet");
         assert_eq!(out.confidence, Confidence::None);
         assert!(out.alternatives.is_empty());
     }
@@ -462,92 +585,116 @@ mod tests {
             )
             .unwrap();
         }
-        let a = search(&lib, "twin spark", None, false, 0)
-            .unwrap()
-            .best
-            .unwrap()
-            .id;
+        let a = standard(&lib, "twin spark").best.unwrap().id;
         for _ in 0..5 {
-            assert_eq!(
-                search(&lib, "twin spark", None, false, 0)
-                    .unwrap()
-                    .best
-                    .unwrap()
-                    .id,
-                a
-            );
+            assert_eq!(standard(&lib, "twin spark").best.unwrap().id, a);
         }
         assert_eq!(a, 1, "ties break toward the older Spark");
     }
 
+    fn doc(id: i64, title: &str) -> SearchDoc {
+        SearchDoc {
+            id,
+            title: title.into(),
+            summary: String::new(),
+            tags: vec![],
+            body: String::new(),
+            favorite: false,
+            usage_count: 0,
+            last_copied_at: None,
+        }
+    }
+
     #[test]
     fn history_is_only_a_tie_breaker() {
-        let docs = vec![
-            SearchDoc {
-                id: 1,
-                title: "MCP Server Architect".into(),
-                summary: String::new(),
-                tags: vec![],
-                body: String::new(),
-                favorite: false,
-                usage_count: 0,
-                last_copied_at: None,
-            },
-            SearchDoc {
-                id: 2,
-                title: "Recipe Helper".into(),
-                summary: "server".into(),
-                tags: vec![],
-                body: String::new(),
-                favorite: true,
-                usage_count: 10_000,
-                last_copied_at: Some(0),
-            },
-        ];
-        let ranked = rank("mcp server", &docs, None, 0);
+        let mut recipe = doc(2, "Recipe Helper");
+        recipe.summary = "server".into();
+        recipe.favorite = true;
+        recipe.usage_count = 10_000;
+        recipe.last_copied_at = Some(0);
+        let docs = vec![doc(1, "MCP Server Architect"), recipe];
+        let ranked = rank("mcp server", &docs, None, None, 0);
         assert_eq!(ranked[0].id, 1);
+    }
+
+    fn semantic(scores: &[(i64, f64)], purpose: &[((i64, i64), f32)]) -> SemanticScores {
+        SemanticScores::from_scores(
+            scores.iter().copied().collect(),
+            purpose.iter().copied().collect(),
+        )
     }
 
     #[test]
     fn semantic_signal_finds_matches_without_shared_words() {
-        // Doc 1 has no lexical overlap with the query but a strongly aligned
-        // vector; the other docs sit at the baseline.
-        let docs: Vec<SearchDoc> = (1..=6)
-            .map(|id| SearchDoc {
-                id,
-                title: format!("Spark {id}"),
-                summary: String::new(),
-                tags: vec![],
-                body: String::new(),
-                favorite: false,
-                usage_count: 0,
-                last_copied_at: None,
-            })
-            .collect();
-        let mut index = VectorIndex::empty(Some("m".into()));
-        index.insert(1, vectors::normalized(vec![1.0, 0.1, 0.0]));
-        for id in 2..=6 {
-            index.insert(id, vectors::normalized(vec![0.3, 1.0, 0.2 * id as f32]));
-        }
-        let sem = SemanticScores::from_index(&index, &[1.0, 0.0, 0.0]).unwrap();
-        let ranked = rank("grow my channel audience", &docs, Some(&sem), 0);
+        let docs: Vec<SearchDoc> = (1..=6).map(|id| doc(id, &format!("Spark {id}"))).collect();
+        let sem = semantic(
+            &[(1, 0.9), (2, 0.1), (3, 0.05), (4, 0.0), (5, 0.0), (6, 0.0)],
+            &[],
+        );
+        let ranked = rank("grow my channel audience", &docs, Some(&sem), None, 0);
         assert_eq!(ranked[0].id, 1);
-        assert!(ranked[0].base >= STRONG_MATCH);
-        assert!(ranked[1].base < STRONG_MATCH);
+        let (confidence, _) = judge(&ranked, Some(&sem));
+        assert_eq!(confidence, Confidence::Strong);
     }
 
     #[test]
-    fn semantic_and_lexical_fuse() {
+    fn near_ties_between_different_sparks_are_not_confident() {
+        let docs: Vec<SearchDoc> = (1..=3).map(|id| doc(id, &format!("Spark {id}"))).collect();
+        let sem = semantic(&[(1, 0.80), (2, 0.74), (3, 0.1)], &[((1, 2), 0.40)]);
+        let ranked = rank("goal", &docs, Some(&sem), None, 0);
+        assert_eq!(judge(&ranked, Some(&sem)).0, Confidence::Weak);
+        // The same lead between two Sparks with the same purpose is decisive:
+        // either one serves the goal.
+        let sem = semantic(&[(1, 0.80), (2, 0.74), (3, 0.1)], &[((1, 2), 0.90)]);
+        let ranked = rank("goal", &docs, Some(&sem), None, 0);
+        assert_eq!(judge(&ranked, Some(&sem)).0, Confidence::Strong);
+    }
+
+    #[test]
+    fn weak_semantic_evidence_is_never_a_best_match() {
+        let docs: Vec<SearchDoc> = (1..=3).map(|id| doc(id, &format!("Spark {id}"))).collect();
+        let sem = semantic(&[(1, 0.40), (2, 0.0), (3, 0.0)], &[]);
+        let ranked = rank("goal", &docs, Some(&sem), None, 0);
+        // 0.6 * 0.40 = 0.24 < SEM_STRONG.
+        assert_eq!(judge(&ranked, Some(&sem)).0, Confidence::Weak);
+        let sem = semantic(&[(1, 0.05), (2, 0.0), (3, 0.0)], &[]);
+        let ranked = rank("goal", &docs, Some(&sem), None, 0);
+        assert_eq!(judge(&ranked, Some(&sem)).0, Confidence::None);
+    }
+
+    #[test]
+    fn rare_terms_outweigh_common_ones() {
+        let mut a = doc(1, "Alpha");
+        a.summary = "common words everywhere".into();
+        let mut b = doc(2, "Beta");
+        b.summary = "zebra".into();
+        let terms = query_terms("common zebra");
+        let weights: HashMap<String, f64> =
+            [("common".to_string(), 0.1), ("zebra".to_string(), 2.0)]
+                .into_iter()
+                .collect();
+        assert!(
+            lexical_score(&terms, &b, Some(&weights)) > lexical_score(&terms, &a, Some(&weights))
+        );
+        // Unweighted, they tie.
+        assert!((lexical_score(&terms, &a, None) - lexical_score(&terms, &b, None)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn semantic_mode_reports_itself_and_uses_weights() {
         let lib = seeded();
-        let mut index = VectorIndex::empty(Some("m".into()));
         let ids = sparks::all_ids(&lib).unwrap();
-        // All vectors identical: semantic carries no preference, lexical decides.
-        for id in &ids {
-            index.insert(*id, vec![1.0, 0.0]);
-        }
-        let sem = SemanticScores::from_index(&index, &[1.0, 0.0]).unwrap();
-        let out = search(&lib, "build an mcp server", Some(&sem), false, 0).unwrap();
+        let scores: HashMap<i64, f64> = ids.iter().map(|id| (*id, 0.0)).collect();
+        let sem = SemanticScores::from_scores(scores, HashMap::new());
+        let out = search(&lib, "build an mcp server", Some(&sem), None, false, 0).unwrap();
         assert_eq!(out.mode, SearchMode::Semantic);
-        assert_eq!(out.best.unwrap().title, "MCP Server Architect");
+        assert_eq!(out.fallback, None);
+        // No semantic preference: words decide, but alone they stay below the
+        // semantic confidence bar, so the Spark is offered, not asserted.
+        let leader = out
+            .best
+            .or_else(|| out.alternatives.first().cloned())
+            .unwrap();
+        assert_eq!(leader.title, "MCP Server Architect");
     }
 }

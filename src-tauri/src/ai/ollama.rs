@@ -10,8 +10,11 @@ use super::models::InstalledModel;
 
 /// Sparkwell only ever talks to a local Ollama instance.
 pub const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
-/// Keep models resident briefly so retrieval stays fast between invocations.
-const KEEP_ALIVE: &str = "15m";
+/// Keep the (small) embedding model resident so searches stay fast between
+/// invocations; a cold load is what makes the first search slow.
+const EMBED_KEEP_ALIVE: &str = "30m";
+/// Smart Add is occasional: release the chat model's memory soon after.
+const CHAT_KEEP_ALIVE: &str = "2m";
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum OllamaError {
@@ -58,6 +61,16 @@ struct TagModel {
     remote_host: Option<String>,
     #[serde(default)]
     remote_model: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
+    details: Option<TagDetails>,
+}
+
+#[derive(Deserialize)]
+struct TagDetails {
+    #[serde(default)]
+    parameter_size: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +144,11 @@ impl OllamaClient {
             .into_iter()
             .map(|m| InstalledModel {
                 remote: m.remote_host.is_some() || m.remote_model.is_some(),
+                size: m.size.filter(|s| *s > 0),
+                parameters_b: m
+                    .details
+                    .and_then(|d| d.parameter_size)
+                    .and_then(|p| super::models::parse_parameters_b(&p)),
                 name: m.name,
             })
             .collect())
@@ -151,7 +169,7 @@ impl OllamaClient {
                 "model": model,
                 "input": inputs,
                 "truncate": true,
-                "keep_alive": KEEP_ALIVE,
+                "keep_alive": EMBED_KEEP_ALIVE,
             }))
             .send()
             .await
@@ -185,7 +203,7 @@ impl OllamaClient {
                 "messages": messages,
                 "stream": false,
                 "format": schema,
-                "keep_alive": "5m",
+                "keep_alive": CHAT_KEEP_ALIVE,
                 "options": { "temperature": 0.2 },
             }))
             .send()

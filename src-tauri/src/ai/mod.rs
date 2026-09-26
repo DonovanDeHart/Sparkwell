@@ -12,6 +12,7 @@ pub mod metadata;
 pub mod models;
 pub mod ollama;
 
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use rusqlite::params;
@@ -19,7 +20,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::error::{AppError, AppResult};
-use crate::search::vectors::{encode, normalized, VectorIndex};
+use crate::search::pool::GENERIC_GOALS;
+use crate::search::profile::{document_views, ProfileSource, PROFILE_VERSION};
+use crate::search::vectors::{encode_views, normalized, VectorIndex};
+use crate::search::Fallback;
+use crate::sparks::{self, SearchDoc};
 use crate::state::AppState;
 use crate::storage::{content_hash, now_ms, Library};
 use metadata::MetadataSuggestion;
@@ -27,12 +32,21 @@ use ollama::OllamaError;
 
 pub const EVENT_AI_STATUS: &str = "sparkwell://ai-status";
 
-const BATCH_SIZE: usize = 8;
-const QUERY_TIMEOUT: Duration = Duration::from_millis(3000);
+/// Texts per `/api/embed` request while indexing.
+const BATCH_TEXTS: usize = 16;
+/// A query embedding from a model that is already loaded answers in well under
+/// a second; this budget only absorbs a busy moment.
+const QUERY_TIMEOUT_WARM: Duration = Duration::from_secs(5);
+/// A cold model must first be loaded into memory. Waiting (with a visible
+/// "waking up" state) gives a consistent semantic result instead of silently
+/// switching to standard search.
+const QUERY_TIMEOUT_COLD: Duration = Duration::from_secs(25);
+/// Ollama keeps the embedding model loaded for 30 minutes after use.
+const WARM_WINDOW: Duration = Duration::from_secs(25 * 60);
+const POOL_TIMEOUT: Duration = Duration::from_secs(90);
 const FIRST_BATCH_TIMEOUT: Duration = Duration::from_secs(120);
 const BATCH_TIMEOUT: Duration = Duration::from_secs(60);
 const METADATA_TIMEOUT: Duration = Duration::from_secs(60);
-const EMBED_BODY_CHARS: usize = 3_000;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +65,11 @@ pub enum AiState {
 pub struct AiStatus {
     pub state: AiState,
     pub embed_model: Option<String>,
+    /// Small local chat model used by Smart Add (None: Auto-fill unavailable).
     pub chat_model: Option<String>,
-    /// Sparks with an embedding for `embed_model`.
+    /// Local chat models exist but are all too large for Smart Add.
+    pub chat_models_too_large: bool,
+    /// Sparks with current vectors for `embed_model`.
     pub indexed: usize,
     pub total: usize,
     pub indexing: bool,
@@ -87,13 +104,32 @@ fn env_override(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
+fn mark_warm(state: &AppState) {
+    if let Ok(mut w) = state.embed_warm_until.lock() {
+        *w = Some(Instant::now() + WARM_WINDOW);
+    }
+}
+
+fn is_warm(state: &AppState) -> bool {
+    state
+        .embed_warm_until
+        .lock()
+        .map(|w| w.is_some_and(|t| Instant::now() < t))
+        .unwrap_or(false)
+}
+
 /// Starts the background service. Returns immediately.
 pub fn spawn_service<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         loop {
             refresh(&app).await;
-            if app.state::<AppState>().ai_status().semantic_ready() {
-                index_pending(&app).await;
+            let status = app.state::<AppState>().ai_status();
+            if status.semantic_ready() {
+                if let Some(model) = status.embed_model {
+                    if ensure_pool(&app, &model).await {
+                        index_pending(&app).await;
+                    }
+                }
             }
             let online = app.state::<AppState>().ai_status().state == AiState::Online;
             let delay = if online {
@@ -126,13 +162,13 @@ pub async fn refresh<R: Runtime>(app: &AppHandle<R>) {
         .unwrap_or(0)
         .max(0) as usize;
 
-    let (online, embed_model, chat_model) = match probe {
+    let (online, embed_model, chat) = match probe {
         Ok(models) => (
             true,
             models::pick_embedding_model(&models, env_override("SPARKWELL_EMBED_MODEL").as_deref()),
             models::pick_chat_model(&models, env_override("SPARKWELL_CHAT_MODEL").as_deref()),
         ),
-        Err(_) => (false, None, None),
+        Err(_) => (false, None, models::ChatChoice::default()),
     };
 
     // Keep vectors for the current model even while offline so a brief outage
@@ -157,7 +193,8 @@ pub async fn refresh<R: Runtime>(app: &AppHandle<R>) {
         };
         if online {
             s.embed_model = embed_model;
-            s.chat_model = chat_model;
+            s.chat_models_too_large = chat.model.is_none() && chat.skipped_large;
+            s.chat_model = chat.model;
         }
         s.total = total;
         s.indexed = indexed.min(total);
@@ -167,122 +204,244 @@ pub async fn refresh<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-/// Loads stored vectors for `model` from the current library.
+/// The views embedded for a Spark (see `search::profile`).
+pub fn spark_views(doc: &SearchDoc) -> Vec<String> {
+    document_views(&ProfileSource {
+        title: &doc.title,
+        summary: &doc.summary,
+        tags: &doc.tags,
+        body: &doc.body,
+    })
+}
+
+/// Identifies exactly what was embedded for a Spark with `model`.
+pub fn views_hash(model: &str, views: &[String]) -> String {
+    content_hash(&[PROFILE_VERSION, model, &views.join("\u{1f}")])
+}
+
+fn docs_in_batches(lib: &Library, ids: &[i64], mut f: impl FnMut(SearchDoc)) -> AppResult<()> {
+    for chunk in ids.chunks(200) {
+        for d in sparks::search_docs(lib, chunk)? {
+            f(d);
+        }
+    }
+    Ok(())
+}
+
+fn expected_hashes(lib: &Library, model: &str) -> AppResult<HashMap<i64, String>> {
+    let mut out = HashMap::new();
+    docs_in_batches(lib, &sparks::all_ids(lib)?, |d| {
+        out.insert(d.id, views_hash(model, &spark_views(&d)));
+    })?;
+    Ok(out)
+}
+
+/// Loads stored vectors for `model` from the current library. Vectors from an
+/// older profile recipe or edited Sparks are left out and re-embedded.
 pub fn reload_vectors<R: Runtime>(app: &AppHandle<R>, model: &str) {
     let state = app.state::<AppState>();
-    let index = state
-        .with_library(|lib| VectorIndex::load(lib, model))
+    let mut index = state
+        .with_library(|lib| {
+            let expected = expected_hashes(lib, model)?;
+            VectorIndex::load(lib, model, &expected)
+        })
         .unwrap_or_else(|_| VectorIndex::empty(Some(model.to_string())));
+    if let Ok(pool) = state.pool.lock() {
+        if let Some((pool_model, vectors)) = pool.as_ref() {
+            if pool_model == model {
+                index.set_pool(vectors.clone());
+            }
+        }
+    }
     if let Ok(mut v) = state.vectors.write() {
         *v = index;
     };
 }
 
-/// Text that represents a Spark for embedding.
-pub fn embed_text(title: &str, summary: &str, tags: &[String], body: &str) -> String {
-    let head: String = body.chars().take(EMBED_BODY_CHARS).collect();
-    format!("{title}\n{summary}\nTags: {}\n\n{head}", tags.join(", "))
+/// Makes sure the generic calibration goals are embedded for `model` and
+/// attached to the index. Returns false while they can't be (Ollama busy).
+async fn ensure_pool<R: Runtime>(app: &AppHandle<R>, model: &str) -> bool {
+    let state = app.state::<AppState>();
+    let cached = state.pool.lock().ok().and_then(|p| {
+        p.as_ref()
+            .filter(|(m, _)| m == model)
+            .map(|(_, v)| v.clone())
+    });
+    let vectors = match cached {
+        Some(v) => v,
+        None => {
+            let texts: Vec<String> = GENERIC_GOALS
+                .iter()
+                .map(|g| models::pool_text(model, g))
+                .collect();
+            match state.ollama.embed(model, &texts, POOL_TIMEOUT).await {
+                Ok(v) => {
+                    mark_warm(&state);
+                    let v: Vec<Vec<f32>> = v.into_iter().map(normalized).collect();
+                    if let Ok(mut p) = state.pool.lock() {
+                        *p = Some((model.to_string(), v.clone()));
+                    }
+                    v
+                }
+                Err(e) => {
+                    log::info!("calibration goals not embedded yet: {e}");
+                    if e == OllamaError::Unreachable {
+                        set_status(app, |s| s.state = AiState::Offline);
+                    }
+                    return false;
+                }
+            }
+        }
+    };
+    if let Ok(mut index) = state.vectors.write() {
+        if index.model.as_deref() == Some(model) && !index.has_pool() {
+            index.set_pool(vectors);
+        }
+    }
+    true
 }
 
 struct Pending {
     id: i64,
-    text: String,
+    /// Views, already formatted for the model.
+    texts: Vec<String>,
     hash: String,
 }
 
-fn load_pending(lib: &Library, model: &str) -> AppResult<Vec<Pending>> {
+fn load_pending(lib: &Library, model: &str, indexed: &HashSet<i64>) -> AppResult<Vec<Pending>> {
     let ids: Vec<i64> = {
-        let mut stmt = lib.conn.prepare(
-            "SELECT id FROM sparks WHERE id NOT IN (SELECT spark_id FROM embeddings WHERE model = ?1)
-             ORDER BY favorite DESC, usage_count DESC, id LIMIT 5000",
-        )?;
-        let rows = stmt.query_map([model], |r| r.get(0))?;
-        rows.collect::<rusqlite::Result<_>>()?
+        let mut stmt = lib
+            .conn
+            .prepare("SELECT id FROM sparks ORDER BY favorite DESC, usage_count DESC, id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+        rows.collect::<rusqlite::Result<Vec<i64>>>()?
+            .into_iter()
+            .filter(|id| !indexed.contains(id))
+            .take(5000)
+            .collect()
     };
-    let docs = crate::sparks::search_docs(lib, &ids)?;
-    Ok(docs
-        .into_iter()
-        .map(|d| {
-            let text = embed_text(&d.title, &d.summary, &d.tags, &d.body);
-            Pending {
-                id: d.id,
-                hash: content_hash(&[model, &text]),
-                text,
-            }
-        })
-        .collect())
+    let mut order: HashMap<i64, usize> = HashMap::new();
+    for (i, id) in ids.iter().enumerate() {
+        order.insert(*id, i);
+    }
+    let mut out = Vec::new();
+    docs_in_batches(lib, &ids, |d| {
+        let views = spark_views(&d);
+        out.push(Pending {
+            id: d.id,
+            hash: views_hash(model, &views),
+            texts: views
+                .iter()
+                .map(|v| models::document_text(model, v))
+                .collect(),
+        });
+    })?;
+    out.sort_by_key(|p| order.get(&p.id).copied().unwrap_or(usize::MAX));
+    Ok(out)
 }
 
 /// Stores vectors, skipping Sparks that were edited or deleted meanwhile.
 fn store_vectors(
     lib: &mut Library,
     model: &str,
-    batch: &[Pending],
-    vectors: Vec<Vec<f32>>,
-) -> AppResult<Vec<(i64, Vec<f32>)>> {
+    batch: &[&Pending],
+    vectors: Vec<Vec<Vec<f32>>>,
+) -> AppResult<Vec<(i64, Vec<Vec<f32>>)>> {
     let ids: Vec<i64> = batch.iter().map(|p| p.id).collect();
-    let current: std::collections::HashMap<i64, String> = crate::sparks::search_docs(lib, &ids)?
+    let current: HashMap<i64, String> = sparks::search_docs(lib, &ids)?
         .into_iter()
-        .map(|d| {
-            (
-                d.id,
-                content_hash(&[model, &embed_text(&d.title, &d.summary, &d.tags, &d.body)]),
-            )
-        })
+        .map(|d| (d.id, views_hash(model, &spark_views(&d))))
         .collect();
     let tx = lib.conn.transaction()?;
     let mut stored = Vec::new();
-    for (pending, vector) in batch.iter().zip(vectors) {
-        if current.get(&pending.id) != Some(&pending.hash) {
+    for (pending, views) in batch.iter().zip(vectors) {
+        if current.get(&pending.id) != Some(&pending.hash) || views.is_empty() {
             continue;
         }
-        let v = normalized(vector);
+        let views: Vec<Vec<f32>> = views.into_iter().map(normalized).collect();
+        let dims = views[0].len();
+        if dims == 0 || views.iter().any(|v| v.len() != dims) {
+            continue;
+        }
         tx.execute(
             "INSERT OR REPLACE INTO embeddings (spark_id, model, dimensions, vector, content_hash, generated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![pending.id, model, v.len() as i64, encode(&v), pending.hash, now_ms()],
+            params![pending.id, model, dims as i64, encode_views(&views), pending.hash, now_ms()],
         )?;
-        stored.push((pending.id, v));
+        stored.push((pending.id, views));
     }
     tx.commit()?;
     Ok(stored)
 }
 
-/// Embeds every Spark that lacks a vector for the current model.
+/// Groups Sparks into requests of about [`BATCH_TEXTS`] texts, never splitting
+/// one Spark's views across requests.
+fn batches(pending: &[Pending]) -> Vec<Vec<&Pending>> {
+    let mut out: Vec<Vec<&Pending>> = Vec::new();
+    let mut current: Vec<&Pending> = Vec::new();
+    let mut texts = 0;
+    for p in pending {
+        if !current.is_empty() && texts + p.texts.len() > BATCH_TEXTS {
+            out.push(std::mem::take(&mut current));
+            texts = 0;
+        }
+        texts += p.texts.len();
+        current.push(p);
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// Embeds every Spark that lacks current vectors for the embedding model.
 async fn index_pending<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<AppState>();
     let Some(model) = state.ai_status().embed_model else {
         return;
     };
     let generation = state.generation();
-    let pending = match state.with_library(|lib| load_pending(lib, &model)) {
+    let indexed: HashSet<i64> = state
+        .vectors
+        .read()
+        .map(|v| {
+            if v.model.as_deref() == Some(model.as_str()) {
+                v.ids().collect()
+            } else {
+                HashSet::new()
+            }
+        })
+        .unwrap_or_default();
+    let pending = match state.with_library(|lib| load_pending(lib, &model, &indexed)) {
         Ok(p) if !p.is_empty() => p,
         _ => return,
     };
-    let prefix = models::document_prefix(&model);
     set_status(app, |s| s.indexing = true);
 
-    for (i, batch) in pending.chunks(BATCH_SIZE).enumerate() {
-        let inputs: Vec<String> = batch
-            .iter()
-            .map(|p| format!("{prefix}{}", p.text))
-            .collect();
+    for (i, batch) in batches(&pending).into_iter().enumerate() {
+        let inputs: Vec<String> = batch.iter().flat_map(|p| p.texts.iter().cloned()).collect();
         let timeout = if i == 0 {
             FIRST_BATCH_TIMEOUT
         } else {
             BATCH_TIMEOUT
         };
         match state.ollama.embed(&model, &inputs, timeout).await {
-            Ok(vectors) => {
+            Ok(flat) => {
+                mark_warm(&state);
                 if state.generation() != generation {
                     break; // library switched; this work belongs to the old one
                 }
-                match state.with_library(|lib| store_vectors(lib, &model, batch, vectors)) {
+                let mut it = flat.into_iter();
+                let per_spark: Vec<Vec<Vec<f32>>> = batch
+                    .iter()
+                    .map(|p| it.by_ref().take(p.texts.len()).collect())
+                    .collect();
+                match state.with_library(|lib| store_vectors(lib, &model, &batch, per_spark)) {
                     Ok(stored) => {
                         if let Ok(mut index) = state.vectors.write() {
                             if index.model.as_deref() == Some(model.as_str()) {
-                                for (id, v) in stored {
-                                    index.insert(id, v);
+                                for (id, views) in stored {
+                                    index.insert(id, views);
                                 }
                             }
                         }
@@ -311,37 +470,53 @@ async fn index_pending<R: Runtime>(app: &AppHandle<R>) {
     set_status(app, |s| s.indexing = false);
 }
 
-/// Embeds a search query. `None` means "use standard search".
-pub async fn embed_query<R: Runtime>(app: &AppHandle<R>, query: &str) -> Option<Vec<f32>> {
+/// Embeds a goal for semantic search. `Err` says why standard search must be
+/// used instead; the UI shows it, so the mode never changes silently.
+pub async fn embed_query<R: Runtime>(app: &AppHandle<R>, goal: &str) -> Result<Vec<f32>, Fallback> {
     let state = app.state::<AppState>();
     let status = state.ai_status();
-    if !status.semantic_ready() {
-        return None;
+    if status.state != AiState::Online {
+        return Err(Fallback::Offline);
     }
-    let model = status.embed_model?;
-    let usable = state
+    let model = status.embed_model.ok_or(Fallback::NoEmbeddingModel)?;
+    let ready = state
         .vectors
         .read()
-        .map(|v| v.model.as_deref() == Some(model.as_str()) && !v.is_empty())
+        .map(|v| v.model.as_deref() == Some(model.as_str()) && v.ready())
         .unwrap_or(false);
-    if !usable {
-        return None;
+    if !ready {
+        wake(app);
+        return Err(Fallback::Indexing);
     }
-    let input = vec![format!("{}{}", models::query_prefix(&model), query)];
-    match state.ollama.embed(&model, &input, QUERY_TIMEOUT).await {
-        Ok(mut v) => v.pop(),
+    let timeout = if is_warm(&state) {
+        QUERY_TIMEOUT_WARM
+    } else {
+        QUERY_TIMEOUT_COLD
+    };
+    let input = vec![models::query_text(&model, goal)];
+    match state.ollama.embed(&model, &input, timeout).await {
+        Ok(mut v) => {
+            mark_warm(&state);
+            v.pop().ok_or(Fallback::Failed)
+        }
         Err(e) => {
             log::info!("query embedding unavailable, using standard search: {e}");
-            if e == OllamaError::Unreachable {
-                set_status(app, |s| s.state = AiState::Offline);
-            }
             wake(app);
-            None
+            Err(match e {
+                OllamaError::Unreachable => {
+                    set_status(app, |s| s.state = AiState::Offline);
+                    Fallback::Offline
+                }
+                OllamaError::Timeout => Fallback::TimedOut,
+                OllamaError::ModelMissing => Fallback::NoEmbeddingModel,
+                OllamaError::BadResponse(_) => Fallback::Failed,
+            })
         }
     }
 }
 
-/// Proposes title/summary/tags for a Spark body. Never saves anything.
+/// Proposes title/summary/tags for a Spark body. Never saves anything, and
+/// only runs when the user asks for it.
 pub async fn suggest_metadata<R: Runtime>(
     app: &AppHandle<R>,
     body: &str,
@@ -350,16 +525,21 @@ pub async fn suggest_metadata<R: Runtime>(
     let status = state.ai_status();
     let model = match (status.smart_add_ready(), status.chat_model) {
         (true, Some(m)) => m,
-        _ => {
+        _ if status.state != AiState::Online => {
             return Err(AppError::Ai(
                 "Local intelligence is offline. Add the details yourself.".into(),
+            ))
+        }
+        _ => {
+            return Err(AppError::Ai(
+                "Auto-fill needs a small local chat model. Add the details yourself.".into(),
             ))
         }
     };
     if body.trim().is_empty() {
         return Err(AppError::Validation("Paste the Spark first.".into()));
     }
-    let content = state
+    let result = state
         .ollama
         .chat_json(
             &model,
@@ -367,20 +547,43 @@ pub async fn suggest_metadata<R: Runtime>(
             metadata::schema(),
             METADATA_TIMEOUT,
         )
-        .await
-        .map_err(|e| {
-            if e == OllamaError::Unreachable {
-                set_status(app, |s| s.state = AiState::Offline);
-            }
-            AppError::Ai(format!(
-                "Couldn't draft details ({e}). You can fill them in yourself."
-            ))
-        })?;
+        .await;
+    // Drafting may have pushed the embedding model out of memory; reload it
+    // quietly so the next search isn't cold.
+    rewarm(app);
+    let content = result.map_err(|e| {
+        if e == OllamaError::Unreachable {
+            set_status(app, |s| s.state = AiState::Offline);
+        }
+        AppError::Ai(format!(
+            "Couldn't draft details ({e}). You can fill them in yourself."
+        ))
+    })?;
     metadata::parse(&content).ok_or_else(|| {
         AppError::Ai(
             "The local model returned something unusable. Fill in the details yourself.".into(),
         )
     })
+}
+
+fn rewarm<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    let Some(model) = state.ai_status().embed_model else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let text = models::pool_text(&model, "warm up");
+        if state
+            .ollama
+            .embed(&model, &[text], FIRST_BATCH_TIMEOUT)
+            .await
+            .is_ok()
+        {
+            mark_warm(&state);
+        }
+    });
 }
 
 /// Called when the panel is shown: preloads the embedding model so the first
@@ -393,9 +596,9 @@ pub fn on_panel_shown<R: Runtime>(app: &AppHandle<R>) {
         wake(app);
         return;
     }
-    let Some(model) = status.embed_model else {
+    if status.embed_model.is_none() {
         return;
-    };
+    }
     let due = LAST_WARMUP
         .lock()
         .map(|mut last| {
@@ -409,18 +612,11 @@ pub fn on_panel_shown<R: Runtime>(app: &AppHandle<R>) {
         })
         .unwrap_or(false);
     if due {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app.state::<AppState>();
-            let _ = state
-                .ollama
-                .embed(&model, &["warm up".to_string()], FIRST_BATCH_TIMEOUT)
-                .await;
-        });
+        rewarm(app);
     }
 }
 
-/// Drops the in-memory vector for a changed/deleted Spark and schedules indexing.
+/// Drops the in-memory vectors for a changed/deleted Spark and schedules indexing.
 pub fn on_spark_changed<R: Runtime>(app: &AppHandle<R>, id: i64) {
     let state = app.state::<AppState>();
     if let Ok(mut v) = state.vectors.write() {
@@ -441,7 +637,30 @@ pub fn on_spark_changed<R: Runtime>(app: &AppHandle<R>, id: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sparks::{self, SparkInput};
+    use crate::sparks::SparkInput;
+
+    fn indexed_ids(lib: &Library, model: &str) -> HashSet<i64> {
+        let expected = expected_hashes(lib, model).unwrap();
+        VectorIndex::load(lib, model, &expected)
+            .unwrap()
+            .ids()
+            .collect()
+    }
+
+    fn fake_vectors(batch: &[&Pending], dims: usize) -> Vec<Vec<Vec<f32>>> {
+        batch
+            .iter()
+            .map(|p| {
+                (0..p.texts.len())
+                    .map(|i| {
+                        let mut v = vec![0.0; dims];
+                        v[i % dims] = 1.0;
+                        v
+                    })
+                    .collect()
+            })
+            .collect()
+    }
 
     #[test]
     fn pending_and_store_skip_stale_content() {
@@ -464,8 +683,12 @@ mod tests {
             },
         )
         .unwrap();
-        let pending = load_pending(&lib, "m").unwrap();
+        let pending = load_pending(&lib, "m", &HashSet::new()).unwrap();
         assert_eq!(pending.len(), 2);
+        assert!(
+            pending.iter().all(|p| p.texts.len() >= 2),
+            "profile + at least one passage"
+        );
 
         // B is edited after its text was captured for embedding.
         sparks::update(
@@ -478,29 +701,47 @@ mod tests {
             },
         )
         .unwrap();
-        let stored = store_vectors(
-            &mut lib,
-            "m",
-            &pending,
-            vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-        )
-        .unwrap();
+        let batch: Vec<&Pending> = pending.iter().collect();
+        let stored = store_vectors(&mut lib, "m", &batch, fake_vectors(&batch, 3)).unwrap();
         let stored_ids: Vec<i64> = stored.iter().map(|(id, _)| *id).collect();
         assert_eq!(stored_ids, vec![a.id]);
 
-        // B is still pending; A is not.
-        let still: Vec<i64> = load_pending(&lib, "m")
+        // B is still pending; A is not. Another model needs its own vectors.
+        let done = indexed_ids(&lib, "m");
+        assert_eq!(done, HashSet::from([a.id]));
+        let still: Vec<i64> = load_pending(&lib, "m", &done)
             .unwrap()
             .iter()
             .map(|p| p.id)
             .collect();
         assert_eq!(still, vec![b.id]);
-        // Another model needs its own vectors.
-        assert_eq!(load_pending(&lib, "other").unwrap().len(), 2);
+        assert!(indexed_ids(&lib, "other").is_empty());
+    }
 
-        let index = VectorIndex::load(&lib, "m").unwrap();
-        assert_eq!(index.len(), 1);
-        assert!(index.contains(a.id));
+    #[test]
+    fn vectors_from_an_older_recipe_are_not_loaded() {
+        let mut lib = Library::open_in_memory();
+        let a = sparks::create(
+            &mut lib,
+            SparkInput {
+                title: "A".into(),
+                body: "alpha".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // A row written by an earlier build (single vector, old hash).
+        lib.conn
+            .execute(
+                "INSERT INTO embeddings VALUES (?1, 'm', 2, x'0000803f00000000', 'old-hash', 0)",
+                [a.id],
+            )
+            .unwrap();
+        assert!(
+            indexed_ids(&lib, "m").is_empty(),
+            "stale vectors are re-embedded, not used"
+        );
+        assert_eq!(load_pending(&lib, "m", &HashSet::new()).unwrap().len(), 1);
     }
 
     #[test]
@@ -515,10 +756,27 @@ mod tests {
             },
         )
         .unwrap();
-        let pending = load_pending(&lib, "m").unwrap();
+        let pending = load_pending(&lib, "m", &HashSet::new()).unwrap();
         sparks::delete(&mut lib, a.id).unwrap();
-        let stored = store_vectors(&mut lib, "m", &pending, vec![vec![1.0]]).unwrap();
+        let batch: Vec<&Pending> = pending.iter().collect();
+        let stored = store_vectors(&mut lib, "m", &batch, fake_vectors(&batch, 3)).unwrap();
         assert!(stored.is_empty());
+    }
+
+    #[test]
+    fn batches_never_split_a_spark() {
+        let pending: Vec<Pending> = (0..7)
+            .map(|id| Pending {
+                id,
+                texts: vec![String::new(); 5],
+                hash: String::new(),
+            })
+            .collect();
+        let groups = batches(&pending);
+        assert!(groups
+            .iter()
+            .all(|g| g.iter().map(|p| p.texts.len()).sum::<usize>() <= BATCH_TEXTS));
+        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), 7);
     }
 
     #[test]

@@ -36,6 +36,10 @@ pub struct AppState {
     /// started against the previous library can detect it and stop.
     pub library_generation: AtomicU64,
     pub vectors: RwLock<VectorIndex>,
+    /// Calibration-goal vectors per embedding model (model, vectors).
+    pub pool: Mutex<Option<(String, Vec<Vec<f32>>)>>,
+    /// Until when the embedding model is believed to be loaded in Ollama.
+    pub embed_warm_until: Mutex<Option<Instant>>,
     pub ai: Mutex<AiStatus>,
     pub ai_wake: tokio::sync::Notify,
     pub ollama: OllamaClient,
@@ -58,6 +62,8 @@ impl AppState {
             library: Mutex::new(library),
             library_generation: AtomicU64::new(1),
             vectors: RwLock::new(VectorIndex::default()),
+            pool: Mutex::new(None),
+            embed_warm_until: Mutex::new(None),
             ai: Mutex::new(AiStatus::default()),
             ai_wake: tokio::sync::Notify::new(),
             ollama: OllamaClient::default(),

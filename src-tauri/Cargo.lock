@@ -3568,6 +3568,7 @@ dependencies = [
 name = "sparkwell"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "log",
  "reqwest",
  "rusqlite",

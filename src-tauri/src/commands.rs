@@ -15,7 +15,7 @@ use crate::ai::{self, AiStatus};
 use crate::error::{AppError, AppResult};
 use crate::hotkey::{self, HotkeyStatus};
 use crate::library::{self, LibraryInfo, SwitchMode};
-use crate::search::{self, SemanticScores};
+use crate::search::{self, Fallback, SemanticScores};
 use crate::sparks::{self, SparkDetail, SparkInput, SparkSummary};
 use crate::state::AppState;
 use crate::storage::now_ms;
@@ -154,20 +154,33 @@ pub async fn search_sparks<R: Runtime>(
 ) -> AppResult<search::SearchOutcome> {
     // Goals are a sentence or two; bound pathological pastes.
     let query: String = query.trim().chars().take(MAX_GOAL_CHARS).collect();
-    let query_vector = ai::embed_query(&app, &query).await;
-    let (scores, indexed) = match &query_vector {
-        Some(qv) => {
+    if search::text::query_terms(&query).is_empty() {
+        return Err(AppError::Validation(
+            "Describe what you're trying to accomplish.".into(),
+        ));
+    }
+    let (scores, fallback, indexed) = match ai::embed_query(&app, &query).await {
+        Ok(qv) => {
             let index = state
                 .vectors
                 .read()
                 .map_err(|_| AppError::Internal("vector lock".into()))?;
-            (SemanticScores::from_index(&index, qv), index.len())
+            let scores = SemanticScores::from_index(&index, &qv);
+            let fallback = scores.is_none().then_some(Fallback::Indexing);
+            (scores, fallback, index.len())
         }
-        None => (None, 0),
+        Err(reason) => (None, Some(reason), 0),
     };
     state.with_library(|lib| {
         let total = lib.spark_count()? as usize;
-        search::search(lib, &query, scores.as_ref(), indexed < total, now_ms())
+        search::search(
+            lib,
+            &query,
+            scores.as_ref(),
+            fallback,
+            indexed < total,
+            now_ms(),
+        )
     })
 }
 
