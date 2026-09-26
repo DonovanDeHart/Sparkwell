@@ -161,6 +161,34 @@ describe('Sparkwell sidebar', () => {
     expect(calls('hide_panel')).toHaveLength(1);
   });
 
+  it('Esc closes Settings and returns focus to the goal', async () => {
+    const user = await renderApp();
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
+    expect(calls('hide_panel')).toHaveLength(0);
+    await waitFor(() => expect(screen.getByLabelText('What are you trying to accomplish?')).toHaveFocus());
+  });
+
+  it('showing the panel again puts focus back inside an open overlay', async () => {
+    const user = await renderApp();
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add New Spark' });
+    const body = within(dialog).getByLabelText(/^Spark/);
+    await waitFor(() => expect(body).toHaveFocus());
+    // Hidden and shown again by the hotkey while the editor was open.
+    act(() => {
+      body.blur();
+      mock.emit('sparkwell://shown', false);
+    });
+    await waitFor(() => expect(body).toHaveFocus());
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('What are you trying to accomplish?')).toHaveFocus());
+  });
+
   it('removing a favorite can be undone', async () => {
     const user = await renderApp();
     await user.click(screen.getByRole('button', { name: 'Remove Deep Research Framework from Favorites' }));

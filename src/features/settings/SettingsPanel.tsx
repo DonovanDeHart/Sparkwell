@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Icon } from '../../components/Icon';
 import { IconButton } from '../../components/IconButton';
 import { Toggle } from '../../components/Toggle';
@@ -51,7 +51,14 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [startupBusy, setStartupBusy] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const ai = intelligenceText(snapshot.ai);
+
+  // Keyboard focus moves into Settings, so Esc and Tab act on it.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+  }, []);
 
   const setStartup = async (enabled: boolean) => {
     setStartupBusy(true);
@@ -74,7 +81,15 @@ export function SettingsPanel({
   };
 
   return (
-    <div className="overlay settings" role="dialog" aria-modal="true" aria-label="Settings" onKeyDown={onKeyDown}>
+    <div
+      ref={dialogRef}
+      className="overlay settings"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+    >
       <div className="overlay-head">
         <IconButton icon="back" label="Back" onClick={onClose} />
         <h2 className="overlay-title">Settings</h2>

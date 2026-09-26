@@ -242,7 +242,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
   const title = isEdit ? 'Edit Spark' : 'Add New Spark';
 
   return (
-    <div className="overlay editor" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown}>
+    <div className="overlay editor" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onKeyDown={onKeyDown}>
       <div className="overlay-head">
         <IconButton icon="back" label="Back" onClick={requestClose} />
         <h2 className="overlay-title">{title}</h2>
@@ -266,6 +266,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
               <textarea
                 id="spark-body"
                 ref={bodyRef}
+                data-autofocus
                 className="textarea editor-body selectable"
                 value={draft.body}
                 spellCheck={false}

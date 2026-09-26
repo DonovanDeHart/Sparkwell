@@ -201,6 +201,8 @@ export interface MockControl {
   searchFallback: Fallback | null;
   lastClipboard: string | null;
   calls: Array<{ cmd: string; args?: Record<string, unknown> }>;
+  /** Raises a core event (e.g. the panel being shown by the hotkey). */
+  emit(event: string, payload: unknown): void;
   /** `firstRun`: no config yet, so no shortcut and the welcome is pending. */
   reset(options?: { empty?: boolean; firstRun?: boolean }): void;
 }
@@ -505,6 +507,7 @@ export function createMockBackend() {
     searchFallback: null,
     lastClipboard: null,
     calls: [],
+    emit: (event, payload) => emit(event, payload),
     reset(options) {
       seed();
       if (options?.empty) sparks = [];

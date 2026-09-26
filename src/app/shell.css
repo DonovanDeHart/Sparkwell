@@ -176,6 +176,11 @@
   animation: overlay-in 200ms var(--ease-out);
 }
 
+/* Overlays take focus as a whole so Esc reaches them; no ring for that. */
+.overlay:focus {
+  outline: none;
+}
+
 @keyframes overlay-in {
   from {
     opacity: 0;
