@@ -469,6 +469,8 @@ describe('Settings', () => {
     const user = await renderApp();
     const dialog = await openSettings(user);
     await user.click(within(dialog).getByRole('button', { name: 'Change' }));
+    const box = within(dialog).getByRole('textbox', { name: /Press the new activation shortcut/ });
+    await waitFor(() => expect(box).toHaveFocus());
     await user.keyboard('{Control>}k{/Control}');
     expect(await within(dialog).findByText(/Hold two modifier keys/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
