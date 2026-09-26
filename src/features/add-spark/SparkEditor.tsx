@@ -352,7 +352,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
             <div className="field">
               <label className="field-label" htmlFor="spark-tags">
                 Tags
-                <span className="field-hint">Enter or comma to add</span>
+                <span className="field-hint">Comma or Enter to add</span>
               </label>
               <div className="tag-input" onClick={() => document.getElementById('spark-tags')?.focus()}>
                 {draft.tags.map((tag) => (
@@ -378,14 +378,21 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                   {...NO_AUTOFILL}
                   disabled={draft.tags.length >= MAX_TAGS}
                   placeholder={draft.tags.length ? '' : 'e.g. MCP, Architecture'}
-                  onChange={(e) => setTagText(e.target.value)}
-                  onKeyDown={onTagKey}
-                  onBlur={() => {
-                    if (tagText.trim()) {
-                      update({ tags: addTags(draft.tags, tagText) });
-                      setTagText('');
+                  onChange={(e) => {
+                    // Commas (typed or pasted) turn what's before them into
+                    // tags right away. Text still pending is saved with the
+                    // Spark; it is not converted on blur, so nothing below
+                    // moves while the pointer is on its way to it.
+                    const text = e.target.value;
+                    const cut = text.lastIndexOf(',');
+                    if (cut < 0) {
+                      setTagText(text.trimStart());
+                      return;
                     }
+                    update({ tags: addTags(draft.tags, text.slice(0, cut)) });
+                    setTagText(text.slice(cut + 1).trimStart());
                   }}
+                  onKeyDown={onTagKey}
                 />
               </div>
             </div>

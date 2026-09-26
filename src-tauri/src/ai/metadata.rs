@@ -67,6 +67,32 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
+/// Small models often answer in lowercase; drafted tags match the Title Case
+/// of the rest of the library ("code review" -> "Code Review", "ai" -> "AI").
+/// Tags with any capitals are kept as written ("iOS", "MCP").
+fn display_tag(tag: &str) -> String {
+    const ACRONYMS: &[&str] = &[
+        "ai", "api", "aws", "cli", "css", "gpu", "html", "llm", "mcp", "qa", "rag", "sdk", "seo",
+        "sql", "ui", "ux",
+    ];
+    if tag.chars().any(char::is_uppercase) {
+        return tag.to_string();
+    }
+    tag.split(' ')
+        .map(|w| {
+            if ACRONYMS.contains(&w) {
+                return w.to_uppercase();
+            }
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Parses and sanitises model output. Tolerates code fences and leading prose.
 pub fn parse(content: &str) -> Option<MetadataSuggestion> {
     let start = content.find('{')?;
@@ -89,7 +115,10 @@ pub fn parse(content: &str) -> Option<MetadataSuggestion> {
                 .collect()
         })
         .unwrap_or_default();
-    let mut tags = normalize_tags(&tags_raw);
+    let mut tags: Vec<String> = normalize_tags(&tags_raw)
+        .iter()
+        .map(|t| display_tag(t))
+        .collect();
     tags.truncate(MAX_TAGS);
     if title.is_empty() {
         return None;
@@ -116,7 +145,16 @@ mod tests {
     fn tolerates_fences_and_noise() {
         let s = parse("Sure!\n```json\n{\"title\": \"  \\\"Research Guide\\\" \", \"summary\": \"x\", \"tags\": [\"a\",\"A\",\"#b\",\"c\",\"d\",\"e\",\"f\"]}\n```").unwrap();
         assert_eq!(s.title, "Research Guide");
-        assert_eq!(s.tags, vec!["a", "b", "c", "d", "e"]);
+        assert_eq!(s.tags, vec!["A", "B", "C", "D", "E"]);
+    }
+
+    #[test]
+    fn drafted_tags_use_title_case() {
+        let s = parse(r#"{"title":"T","summary":"","tags":["code review","ai agents","MCP","iOS","software"]}"#).unwrap();
+        assert_eq!(
+            s.tags,
+            vec!["Code Review", "AI Agents", "MCP", "iOS", "Software"]
+        );
     }
 
     #[test]

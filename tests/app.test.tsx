@@ -215,6 +215,22 @@ describe('Sparkwell sidebar', () => {
     expect(await screen.findByRole('button', { name: 'Copy Deep Research Framework' })).toBeInTheDocument();
   });
 
+  it('keeps Undo available for ten seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<App />);
+      await screen.findByText('Codex Architecture Expert');
+      await user.click(screen.getByRole('button', { name: 'Remove Deep Research Framework from Favorites' }));
+      await screen.findByText(/Removed “Deep Research Framework” from Favorites/);
+      act(() => vi.advanceTimersByTime(8_000));
+      expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(2_500));
+      expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('Add New Spark', () => {
@@ -251,6 +267,36 @@ describe('Add New Spark', () => {
     fields.forEach((field) => {
       expect(field, field.id).toHaveAttribute('autocomplete', 'off');
       expect(field, field.id).toHaveAttribute('autocapitalize', 'off');
+    });
+  });
+
+  it('turns tags into chips as commas are typed, without moving the layout on blur', async () => {
+    const user = await renderApp();
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add New Spark' });
+    await user.type(within(dialog).getByLabelText(/^Spark/), 'Plan a product launch.');
+    const tags = within(dialog).getByLabelText(/^Tags/);
+    await user.type(tags, 'A, B, C');
+    expect(within(dialog).getByRole('button', { name: 'Remove tag A' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Remove tag B' })).toBeInTheDocument();
+    expect(tags).toHaveValue('C');
+    // Leaving the field doesn't reflow it: the next click lands where aimed.
+    await user.click(within(dialog).getByRole('switch', { name: 'Add to Favorites' }));
+    expect(tags).toHaveValue('C');
+    expect(within(dialog).queryByRole('button', { name: 'Remove tag C' })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('switch', { name: 'Add to Favorites' })).toHaveAttribute('aria-checked', 'true');
+
+    await user.type(tags, ',');
+    await user.paste('Launch, Go-to-market');
+    expect(within(dialog).getByRole('button', { name: 'Remove tag Launch' })).toBeInTheDocument();
+    expect(tags).toHaveValue('Go-to-market');
+
+    // Pending text is saved as a tag too.
+    await user.click(within(dialog).getByRole('button', { name: /Save Spark/ }));
+    await waitFor(() => expect(calls('create_spark')).toHaveLength(1));
+    expect(calls('create_spark')[0]!.args!.input).toMatchObject({
+      tags: ['A', 'B', 'C', 'Launch', 'Go-to-market'],
+      favorite: true,
     });
   });
 

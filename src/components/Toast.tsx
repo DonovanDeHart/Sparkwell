@@ -9,6 +9,9 @@ export interface ToastMessage {
   duration?: number;
 }
 
+/** Toasts with an action (Undo) stay long enough to notice and use. */
+export const ACTION_MS = 10_000;
+
 /** One calm toast at a time; a new message replaces the current one. */
 export function useToast() {
   const [toast, setToast] = useState<ToastMessage | null>(null);
@@ -24,7 +27,7 @@ export function useToast() {
     window.clearTimeout(timer.current);
     const id = nextId.current++;
     setToast({ ...message, id });
-    const duration = message.duration ?? (message.action ? 5000 : message.tone === 'error' ? 4200 : 2200);
+    const duration = message.duration ?? (message.action ? ACTION_MS : message.tone === 'error' ? 4200 : 2200);
     timer.current = window.setTimeout(() => setToast((t) => (t?.id === id ? null : t)), duration);
   }, []);
 

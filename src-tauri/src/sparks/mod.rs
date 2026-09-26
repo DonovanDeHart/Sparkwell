@@ -100,19 +100,108 @@ fn truncate_words(s: &str, max_chars: usize) -> String {
     )
 }
 
-/// Derives a readable title from the first meaningful line of a Spark body.
-pub fn derive_title(body: &str) -> String {
-    let line = body
-        .lines()
-        .map(|l| {
-            l.trim()
-                .trim_start_matches(['#', '*', '>', '-', '=', '_', '`'])
-                .trim()
+const MAX_DERIVED_TITLE: usize = 60;
+
+/// Markdown headings are structure (a title), not summary prose.
+fn is_heading(line: &str) -> bool {
+    line.trim_start().starts_with('#')
+}
+
+fn strip_markers(line: &str) -> &str {
+    line.trim()
+        .trim_start_matches(['#', '*', '>', '-', '=', '_', '`'])
+        .trim()
+}
+
+/// The first sentence of a line, including its closing punctuation.
+fn first_sentence(line: &str) -> &str {
+    for (i, c) in line.char_indices() {
+        if matches!(c, '.' | '!' | '?') {
+            let end = i + c.len_utf8();
+            if line[end..].chars().next().map_or(true, char::is_whitespace) {
+                return &line[..end];
+            }
+        }
+    }
+    line
+}
+
+/// Capitalises each word (keeping any capitals already there, e.g.
+/// "YouTube", "MCP"); short joining words stay lowercase.
+fn title_case(words: &[&str]) -> String {
+    const SMALL: &[&str] = &[
+        "a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "with",
+    ];
+    words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            if i > 0 && SMALL.contains(w) {
+                return (*w).to_string();
+            }
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => String::new(),
+            }
         })
-        .find(|l| !l.is_empty())
-        .unwrap_or("Untitled Spark");
-    let line = line.trim_end_matches([':', '*', '#', '`']).trim();
-    let title = truncate_words(&collapse_whitespace(line), 60);
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Titles a role-style opening: "You are a database performance engineer.
+/// Diagnose…" -> "Database Performance Engineer".
+fn role_title(sentence: &str) -> Option<String> {
+    const PREAMBLES: &[&str] = &[
+        "you are ",
+        "you're ",
+        "act as ",
+        "acting as ",
+        "pretend you are ",
+        "imagine you are ",
+        "behave as ",
+        "serve as ",
+    ];
+    const ARTICLES: &[&str] = &["a ", "an ", "the ", "my "];
+    const CLAUSE_BREAKS: &[&str] = &[
+        " who ",
+        " that ",
+        " which ",
+        " working ",
+        " with ",
+        " specializing ",
+        " specialising ",
+        " helping ",
+        " focused ",
+        " known ",
+        " and ",
+        " to ",
+        " for ",
+    ];
+    // ASCII lowercasing keeps byte offsets aligned with `sentence`.
+    let lower = sentence.to_ascii_lowercase();
+    let preamble = PREAMBLES.iter().find(|p| lower.starts_with(**p))?;
+    let mut start = preamble.len();
+    if let Some(article) = ARTICLES.iter().find(|a| lower[start..].starts_with(**a)) {
+        start += article.len();
+    }
+    let rest = &lower[start..];
+    let mut end = rest
+        .find(['.', ',', ';', ':', '(', '!', '?', '—', '–'])
+        .unwrap_or(rest.len());
+    for clause in CLAUSE_BREAKS {
+        if let Some(i) = rest.find(clause) {
+            end = end.min(i);
+        }
+    }
+    let words: Vec<&str> = sentence[start..start + end].split_whitespace().collect();
+    // One word ("an assistant") says too little; many words aren't a title.
+    (2..=6).contains(&words.len()).then(|| title_case(&words))
+}
+
+fn fit_title(text: &str) -> String {
+    let text = text.trim_end_matches(['.', ':', '*', '#', '`']).trim();
+    let title = truncate_words(&collapse_whitespace(text), MAX_DERIVED_TITLE);
     if title.is_empty() {
         "Untitled Spark".into()
     } else {
@@ -120,16 +209,45 @@ pub fn derive_title(body: &str) -> String {
     }
 }
 
-/// Derives a short summary from the body when the user provided none.
-pub fn derive_summary(body: &str, skip_first_line: bool) -> String {
-    let text: String = if skip_first_line {
-        let mut lines = body.lines().skip_while(|l| l.trim().is_empty());
-        lines.next();
-        lines.collect::<Vec<_>>().join(" ")
+/// Derives a title from the start of a Spark body, and returns the text a
+/// derived summary should draw from (whatever the title didn't use).
+fn derive_lead(body: &str) -> (String, String) {
+    let mut lines = body.lines();
+    let Some(first) = lines.by_ref().find(|l| !strip_markers(l).is_empty()) else {
+        return ("Untitled Spark".into(), String::new());
+    };
+    let rest = lines.collect::<Vec<_>>().join("\n");
+    if is_heading(first) {
+        return (fit_title(strip_markers(first)), rest);
+    }
+    let line = strip_markers(first);
+    let sentence = first_sentence(line);
+    let after = format!("{}\n{rest}", &line[sentence.len()..]);
+    if let Some(title) = role_title(sentence) {
+        return (title, after);
+    }
+    if sentence.chars().count() <= MAX_DERIVED_TITLE + 1 {
+        return (fit_title(sentence), after);
+    }
+    // Too long to be a title: shortened, and the summary keeps all of it.
+    (fit_title(sentence), format!("{line}\n{rest}"))
+}
+
+/// Derives a readable title from the start of a Spark body.
+pub fn derive_title(body: &str) -> String {
+    derive_lead(body).0
+}
+
+/// Derives a short summary from the body when the user provided none. When
+/// the title was derived too, the summary starts after what the title used.
+pub fn derive_summary(body: &str, title_was_derived: bool) -> String {
+    let text = if title_was_derived {
+        derive_lead(body).1
     } else {
         body.to_string()
     };
-    let cleaned: String = collapse_whitespace(&text.replace(['#', '*', '`', '>'], " "));
+    let prose: Vec<&str> = text.lines().filter(|l| !is_heading(l)).collect();
+    let cleaned: String = collapse_whitespace(&prose.join(" ").replace(['#', '*', '`', '>'], " "));
     if cleaned.is_empty() {
         return String::new();
     }
@@ -775,6 +893,67 @@ mod tests {
         let long = derive_title(&"word ".repeat(40));
         assert!(long.ends_with('…'));
         assert!(long.chars().count() <= 61);
+    }
+
+    #[test]
+    fn derived_titles_name_the_role_instead_of_cutting_a_sentence() {
+        let cases = [
+            (
+                "You are a database performance engineer. Diagnose and speed up the slow query below.",
+                "Database Performance Engineer",
+            ),
+            (
+                "You are a senior software architect working inside my repository as an autonomous coding agent.",
+                "Senior Software Architect",
+            ),
+            (
+                "You are an expert in the Model Context Protocol (MCP) and production backend engineering.",
+                "Expert in the Model Context Protocol",
+            ),
+            (
+                "You are a YouTube strategist and scriptwriter known for high-retention videos.",
+                "YouTube Strategist",
+            ),
+            (
+                "Act as a senior troubleshooting engineer. Help me find the root cause.",
+                "Senior Troubleshooting Engineer",
+            ),
+            // Not a role: the first sentence, without a trailing period.
+            (
+                "Summarize these meeting notes into action items. Keep it short.",
+                "Summarize these meeting notes into action items",
+            ),
+            // One vague word isn't a title; the sentence is.
+            (
+                "You are an assistant. Reply to my emails politely.",
+                "You are an assistant",
+            ),
+        ];
+        for (body, title) in cases {
+            assert_eq!(derive_title(body), title, "{body}");
+        }
+    }
+
+    #[test]
+    fn derived_summaries_skip_headings_and_what_the_title_used() {
+        let md = "# Python Refactoring Coach 🔥❄️\n\nYou are a senior Python engineer. Refactor my code for clarity.";
+        // A typed title: the heading still isn't summary text.
+        assert_eq!(
+            derive_summary(md, false),
+            "You are a senior Python engineer. Refactor my code for clarity."
+        );
+        assert_eq!(
+            derive_summary(md, true),
+            "You are a senior Python engineer. Refactor my code for clarity."
+        );
+        let plain =
+            "You are a database performance engineer. Diagnose and speed up the slow query below.";
+        assert_eq!(
+            derive_summary(plain, true),
+            "Diagnose and speed up the slow query below."
+        );
+        // A single sentence that became the whole title leaves no summary.
+        assert_eq!(derive_summary("Plan a product launch.", true), "");
     }
 
     #[test]
