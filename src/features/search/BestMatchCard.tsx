@@ -61,7 +61,7 @@ export function BestMatchCard({ spark, copied, onCopy, onToggleFavorite, onEdit,
           type="button"
           className={`button is-fire is-large copy-spark${copied ? ' is-done' : ''}`}
           onClick={() => onCopy(spark)}
-          title="Copy the complete Spark (Ctrl+Enter)"
+          title="Copy the complete Spark (Enter again, or Ctrl+Enter)"
         >
           {copied ? (
             <>

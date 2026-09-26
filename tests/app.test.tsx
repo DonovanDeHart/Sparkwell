@@ -87,6 +87,26 @@ describe('Sparkwell sidebar', () => {
     expect(mock.lastClipboard).toContain('YouTube strategist');
   });
 
+  it('Enter again copies the Best Match, and a changed goal searches again', async () => {
+    const user = await renderApp();
+    await searchFor(user, 'I need AI to help me build an MCP server.');
+    await screen.findByRole('article');
+    expect(screen.getByText(/again copies the Best Match/)).toBeInTheDocument();
+    expect(screen.queryByText(/Ctrl/, { selector: '#goal-hint *' })).not.toBeInTheDocument();
+
+    const input = screen.getByLabelText('What are you trying to accomplish?');
+    await user.type(input, ' Quickly');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(calls('search_sparks')).toHaveLength(2));
+    expect(calls('copy_spark')).toHaveLength(0);
+
+    await screen.findByText(/again copies the Best Match/);
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(calls('copy_spark')).toHaveLength(1));
+    expect(mock.lastClipboard).toContain('Model Context Protocol');
+    expect(calls('search_sparks')).toHaveLength(2);
+  });
+
   it('is honest when nothing matches and offers to add a Spark', async () => {
     const user = await renderApp();
     await searchFor(user, 'bake sourdough bread');

@@ -370,6 +370,9 @@ export function App() {
                 value={query}
                 onChange={onQueryChange}
                 onSubmit={() => void search.run(query)}
+                onCopyBest={() => {
+                  if (search.state.status === 'done' && search.state.outcome.best) void copy(search.state.outcome.best);
+                }}
                 inputRef={inputRef}
                 disabled={snapshot !== null && !libraryReady}
                 hasResult={hasResult}

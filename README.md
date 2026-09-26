@@ -25,8 +25,9 @@ A **Spark** is a reusable expression of intent: a prompt, workflow, role definit
 | --- | --- |
 | Your activation shortcut (chosen on first run) | Show / focus / hide Sparkwell from any app |
 | `Enter` | Find the best Spark for the goal |
+| `Enter` again | Copy the Best Match shown for that goal |
 | `Shift+Enter` | New line in the goal |
-| `Ctrl+Enter` | Copy the Best Match |
+| `Ctrl+Enter` | Copy the Best Match (if another app hasn't taken it globally) |
 | `Esc` | Close the open panel; otherwise collapse Sparkwell (unpinned) |
 | `Ctrl+N` | Add New Spark |
 | `Ctrl+,` | Settings |

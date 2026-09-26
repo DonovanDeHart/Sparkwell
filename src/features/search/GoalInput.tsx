@@ -6,6 +6,8 @@ interface GoalInputProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  /** Enter on an unchanged goal whose Best Match is showing copies it. */
+  onCopyBest: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   disabled?: boolean;
   /** The current text has already been searched and a Spark is showing. */
@@ -15,7 +17,7 @@ interface GoalInputProps {
 const MAX_HEIGHT = 180;
 
 /** The primary question. Natural language in, Enter to retrieve. */
-export function GoalInput({ value, onChange, onSubmit, inputRef, disabled, hasResult }: GoalInputProps) {
+export function GoalInput({ value, onChange, onSubmit, onCopyBest, inputRef, disabled, hasResult }: GoalInputProps) {
   // Grow with the text up to a comfortable maximum. Measurements taken while
   // the window is hidden are unreliable, so re-measure whenever it resizes.
   useLayoutEffect(() => {
@@ -65,7 +67,10 @@ export function GoalInput({ value, onChange, onSubmit, inputRef, disabled, hasRe
             if (e.ctrlKey || e.metaKey) return;
             if (!e.shiftKey) {
               e.preventDefault();
-              if (canSubmit) onSubmit();
+              // Enter again copies: a keyboard path that no global shortcut
+              // in another app can take over (Ctrl+Enter sometimes is).
+              if (hasResult) onCopyBest();
+              else if (canSubmit) onSubmit();
             }
           }}
         />
@@ -83,7 +88,7 @@ export function GoalInput({ value, onChange, onSubmit, inputRef, disabled, hasRe
       <div className="goal-hint" id="goal-hint">
         {hasResult ? (
           <span>
-            <kbd>Ctrl</kbd>+<kbd>Enter</kbd> copies the Best Match
+            <kbd>Enter</kbd> again copies the Best Match
           </span>
         ) : value.trim() ? (
           <span>
