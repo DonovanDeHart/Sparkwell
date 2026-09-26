@@ -92,6 +92,29 @@ impl AppState {
         }
     }
 
+    /// Like [`Self::with_library`] for writes: afterwards the change is also
+    /// checkpointed into `sparkwell.db`, so the file is current on its own.
+    pub fn write_library<T>(&self, f: impl FnOnce(&mut Library) -> AppResult<T>) -> AppResult<T> {
+        self.with_library(|lib| {
+            let out = f(lib)?;
+            lib.checkpoint();
+            Ok(out)
+        })
+    }
+
+    /// Closes the open library cleanly (on quit). Safe to call more than once.
+    pub fn close_library(&self) {
+        let Ok(mut slot) = self.library.lock() else {
+            return;
+        };
+        if let Some(lib) = slot.db.take() {
+            match lib.close() {
+                Ok(()) => log::info!("library closed cleanly"),
+                Err(e) => log::warn!("{e}"),
+            }
+        }
+    }
+
     pub fn config_snapshot(&self) -> AppConfig {
         self.config.lock().map(|c| c.clone()).unwrap_or_default()
     }

@@ -87,7 +87,7 @@ pub async fn create_spark<R: Runtime>(
     state: State<'_, AppState>,
     input: SparkInput,
 ) -> AppResult<SparkSummary> {
-    let spark = state.with_library(|lib| sparks::create(lib, input))?;
+    let spark = state.write_library(|lib| sparks::create(lib, input))?;
     ai::on_spark_changed(&app, spark.id);
     Ok(spark)
 }
@@ -99,7 +99,7 @@ pub async fn update_spark<R: Runtime>(
     id: i64,
     input: SparkInput,
 ) -> AppResult<SparkSummary> {
-    let spark = state.with_library(|lib| sparks::update(lib, id, input))?;
+    let spark = state.write_library(|lib| sparks::update(lib, id, input))?;
     ai::on_spark_changed(&app, spark.id);
     Ok(spark)
 }
@@ -110,7 +110,7 @@ pub async fn delete_spark<R: Runtime>(
     state: State<'_, AppState>,
     id: i64,
 ) -> AppResult<()> {
-    state.with_library(|lib| sparks::delete(lib, id))?;
+    state.write_library(|lib| sparks::delete(lib, id))?;
     ai::on_spark_changed(&app, id);
     Ok(())
 }
@@ -121,7 +121,7 @@ pub async fn set_favorite(
     id: i64,
     favorite: bool,
 ) -> AppResult<SparkSummary> {
-    state.with_library(|lib| sparks::set_favorite(lib, id, favorite))
+    state.write_library(|lib| sparks::set_favorite(lib, id, favorite))
 }
 
 /// Copies the complete stored body (never the summary) to the clipboard.
@@ -136,7 +136,7 @@ pub async fn copy_spark<R: Runtime>(
         .write_text(body.clone())
         .map_err(|e| AppError::Clipboard(e.to_string()))?;
     // Usage is recorded only after the clipboard write succeeded.
-    if let Err(e) = state.with_library(|lib| sparks::record_copy(lib, id)) {
+    if let Err(e) = state.write_library(|lib| sparks::record_copy(lib, id)) {
         log::warn!("copied but couldn't record usage: {e}");
     }
     Ok(CopyResult {

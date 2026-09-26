@@ -25,7 +25,7 @@ pub mod window;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{App, Manager, WindowEvent};
+use tauri::{App, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::ShortcutState;
 
@@ -34,8 +34,15 @@ use state::AppState;
 
 /// Passed by the OS autostart entry so Sparkwell starts quietly in the tray.
 pub const HIDDEN_ARG: &str = "--hidden";
+/// Asks a running Sparkwell to quit cleanly (used by scripts and installers).
+pub const QUIT_ARG: &str = "--quit";
 
 fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|a| a == QUIT_ARG) {
+        // Nothing was running: there is nothing to quit.
+        app.handle().exit(0);
+        return Ok(());
+    }
     // User data lives outside the install and outside the WebView cache
     // folder, so uninstalling or clearing app data never touches the library.
     let data_root = app.path().local_data_dir()?.join("Sparkwell");
@@ -106,9 +113,14 @@ fn build_tray(app: &mut App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Must be first: a second launch just reveals the running instance.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            window::show(app)
+        // Must be first: a second launch just reveals the running instance
+        // (or, with --quit, asks it to quit cleanly).
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|a| a == QUIT_ARG) {
+                app.exit(0);
+            } else {
+                window::show(app)
+            }
         }))
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -168,6 +180,15 @@ pub fn run() {
             commands::retry_library,
             commands::get_library_info,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Sparkwell");
+        .build(tauri::generate_context!())
+        .expect("error while building Sparkwell")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                // Quit (tray, Settings, --quit): leave a complete, self-contained
+                // library file behind, with nothing left only in the WAL.
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.close_library();
+                }
+            }
+        });
 }

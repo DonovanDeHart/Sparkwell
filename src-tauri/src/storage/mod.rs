@@ -88,6 +88,35 @@ impl Library {
         }
     }
 
+    /// Copies committed changes from the write-ahead log into the library file
+    /// without blocking. Called after writes so `sparkwell.db` stays current on
+    /// its own even while Sparkwell is running (e.g. for backups).
+    pub fn checkpoint(&self) {
+        if let Err(e) = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))
+        {
+            log::warn!("library checkpoint failed: {e}");
+        }
+    }
+
+    /// Closes the library cleanly: every change is written into
+    /// `sparkwell.db`, the write-ahead log is emptied, and the connection is
+    /// closed, so the library file is complete and independently usable.
+    pub fn close(self) -> AppResult<()> {
+        let (busy, _, _): (i64, i64, i64) =
+            self.conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
+        if busy != 0 {
+            log::warn!("library checkpoint was busy at close");
+        }
+        self.conn
+            .close()
+            .map_err(|(_, e)| AppError::Database(format!("couldn't close the library: {e}")))
+    }
+
     pub fn spark_count(&self) -> AppResult<i64> {
         Ok(self
             .conn
@@ -243,6 +272,69 @@ mod tests {
         )
         .unwrap();
         assert!(Library::open(dir.path(), OpenMode::ExistingOnly).is_err());
+    }
+
+    fn add_sparks(lib: &mut Library, n: usize) {
+        for i in 0..n {
+            crate::sparks::create(
+                lib,
+                crate::sparks::SparkInput {
+                    title: format!("Spark {i}"),
+                    body: format!("Body of spark {i}: {}", "detail ".repeat(200)),
+                    tags: vec!["Test".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    /// Opens a copy of just `sparkwell.db` (no -wal/-shm sidecars) and checks
+    /// it is a complete, healthy Sparkwell library.
+    fn assert_standalone_copy_is_complete(src: &Path, expected_sparks: i64) {
+        let copy_dir = tempfile::tempdir().unwrap();
+        let copy = library_file(copy_dir.path());
+        std::fs::copy(library_file(src), &copy).unwrap();
+        let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sparks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, expected_sparks);
+        let app_id: i32 = conn
+            .query_row("PRAGMA application_id", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(app_id, APPLICATION_ID);
+        integrity_check(&conn).unwrap();
+        drop(conn);
+        // And Sparkwell itself opens it.
+        let reopened = Library::open(copy_dir.path(), OpenMode::ExistingOnly).unwrap();
+        assert_eq!(reopened.spark_count().unwrap(), expected_sparks);
+    }
+
+    #[test]
+    fn clean_close_leaves_a_self_contained_library_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lib = Library::open(dir.path(), OpenMode::CreateIfMissing).unwrap();
+        add_sparks(&mut lib, 25);
+        lib.close().unwrap();
+
+        let wal = dir.path().join("sparkwell.db-wal");
+        assert!(
+            !wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0,
+            "no data may be left only in the write-ahead log"
+        );
+        assert_standalone_copy_is_complete(dir.path(), 25);
+    }
+
+    #[test]
+    fn checkpoints_keep_the_file_current_while_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lib = Library::open(dir.path(), OpenMode::CreateIfMissing).unwrap();
+        add_sparks(&mut lib, 10);
+        lib.checkpoint();
+        // The connection is still open (as while Sparkwell runs).
+        assert_standalone_copy_is_complete(dir.path(), 10);
+        drop(lib);
     }
 
     #[test]

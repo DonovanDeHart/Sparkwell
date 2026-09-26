@@ -97,9 +97,16 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 /// Installs `slot` as the active library and refreshes dependent state.
 fn install<R: Runtime>(app: &AppHandle<R>, slot: LibrarySlot) {
     let state = app.state::<AppState>();
-    {
+    let previous = {
         let mut current = state.library.lock().expect("library lock poisoned");
-        *current = slot;
+        std::mem::replace(&mut *current, slot)
+    };
+    // The library being left behind is closed cleanly, so its file stays a
+    // complete backup.
+    if let Some(old) = previous.db {
+        if let Err(e) = old.close() {
+            log::warn!("{e}");
+        }
     }
     state.bump_generation();
     if let Some(model) = state.ai_status().embed_model {

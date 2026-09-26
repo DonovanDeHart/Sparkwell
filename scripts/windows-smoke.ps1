@@ -13,7 +13,8 @@
     6. The core loop by keyboard: type a goal, Enter, Ctrl+Enter -> the complete
        Spark is on the Windows clipboard and the unpinned panel collapses.
     7. The library persists across a restart (retrieved and copied again).
-    8. Uninstalling never deletes the user's library.
+    8. `sparkwell --quit` closes it cleanly and sparkwell.db is complete on its own.
+    9. Uninstalling never deletes the user's library.
   A screenshot of the docked panel is written to smoke-artifacts/.
 #>
 $ErrorActionPreference = 'Stop'
@@ -221,7 +222,15 @@ if ($relaunched -and (Wait-Until { (Find-Sparkwell) -eq [Win]::GetForegroundWind
 } else {
   Check $false 'relaunched panel takes focus for the persistence check'
 }
-Stop-Process -Id $proc.Id -Force
+
+# ------------------------------------------------------------------ clean quit leaves a complete library file
+$quit = Start-Process -FilePath $exe.FullName -ArgumentList '--quit' -PassThru
+Check (Wait-Until { $proc.HasExited } 10) 'sparkwell --quit closes the running instance'
+if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+Wait-Until { $quit.HasExited } 5 | Out-Null
+$wal = "$library-wal"
+Check (-not (Test-Path $wal) -or (Get-Item $wal).Length -eq 0) 'after a clean quit nothing is left only in the write-ahead log'
+Check ((Get-Item $library).Length -ge 64KB) "sparkwell.db holds the library on its own ($((Get-Item $library).Length) bytes)"
 Start-Sleep -Seconds 1
 
 # ------------------------------------------------------------------ uninstall keeps the library

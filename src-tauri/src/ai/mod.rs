@@ -436,7 +436,7 @@ async fn index_pending<R: Runtime>(app: &AppHandle<R>) {
                     .iter()
                     .map(|p| it.by_ref().take(p.texts.len()).collect())
                     .collect();
-                match state.with_library(|lib| store_vectors(lib, &model, &batch, per_spark)) {
+                match state.write_library(|lib| store_vectors(lib, &model, &batch, per_spark)) {
                     Ok(stored) => {
                         if let Ok(mut index) = state.vectors.write() {
                             if index.model.as_deref() == Some(model.as_str()) {
