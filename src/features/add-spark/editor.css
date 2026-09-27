@@ -1,0 +1,137 @@
+.editor-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.editor-body {
+  min-height: 190px;
+  max-height: 42vh;
+  resize: vertical;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.smart-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  margin-top: -6px;
+  font-size: var(--fs-xs);
+  color: var(--ice-soft);
+}
+
+.smart-add-button {
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--fs-xs);
+}
+
+.smart-add-text {
+  min-width: 0;
+  line-height: 1.4;
+  color: #8fb6bd;
+}
+
+.smart-add-text code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  color: var(--text-2);
+}
+
+.smart-add-button {
+  flex: none;
+}
+
+.smart-add-cancel {
+  height: 28px;
+  padding: 0 10px;
+  margin-left: auto;
+  font-size: var(--fs-xs);
+}
+
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-radius: 11px;
+  border: 1px solid #2b3643;
+  background: var(--field);
+  cursor: text;
+  transition:
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.tag-input:focus-within {
+  border-color: rgba(84, 221, 235, 0.6);
+  box-shadow: 0 0 0 3px rgba(84, 221, 235, 0.1);
+}
+
+.tag-chip {
+  height: 25px;
+  padding: 0 4px 0 9px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.tag-remove {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--muted);
+}
+
+.tag-remove:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tag-input-field {
+  flex: 1;
+  min-width: 90px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.tag-input-field:focus-visible {
+  outline: none; /* the container shows focus */
+}
+
+.tag-input-field::placeholder {
+  color: #66707d;
+}
+
+.favorite-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--border-row);
+  background: var(--row);
+}
+
+.favorite-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.favorite-label .icon {
+  color: var(--fire);
+}

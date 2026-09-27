@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#131c26"/>
+      <stop offset="1" stop-color="#070b10"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.52" r="0.5">
+      <stop offset="0" stop-color="#54ddeb" stop-opacity="0.28"/>
+      <stop offset="0.6" stop-color="#54ddeb" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#54ddeb" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lite" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2fdff"/>
+      <stop offset="0.45" stop-color="#8eeaf6"/>
+      <stop offset="1" stop-color="#2aa9c7"/>
+    </linearGradient>
+    <linearGradient id="mid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9ef0fa"/>
+      <stop offset="0.5" stop-color="#3fcfe2"/>
+      <stop offset="1" stop-color="#157f9e"/>
+    </linearGradient>
+    <linearGradient id="dark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#56d9ea"/>
+      <stop offset="1" stop-color="#0d5f7a"/>
+    </linearGradient>
+    <radialGradient id="ember" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffe2a8"/>
+      <stop offset="0.45" stop-color="#f39a3d" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#f39a3d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="216" fill="url(#bg)"/>
+  <rect x="49.5" y="49.5" width="925" height="925" rx="214.5" fill="none" stroke="#2a3542" stroke-width="3"/>
+  <circle cx="512" cy="540" r="400" fill="url(#halo)"/>
+  <g transform="translate(512 520) scale(11.5) translate(-32 -32)">
+    <path d="M18 15 L22.5 28 L32 60 L11 35 Z" fill="url(#dark)"/>
+    <path d="M18 15 L22.5 28 L32 60 Z" fill="url(#mid)" opacity="0.55"/>
+    <path d="M46 15 L41.5 28 L32 60 L53 35 Z" fill="url(#dark)"/>
+    <path d="M32 3 L22.5 28 L32 60 Z" fill="url(#lite)"/>
+    <path d="M32 3 L41.5 28 L32 60 Z" fill="url(#mid)"/>
+    <circle cx="32" cy="41" r="5.5" fill="url(#ember)"/>
+  </g>
+</svg>
