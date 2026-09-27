@@ -13,7 +13,7 @@ A **Spark** is a reusable expression of intent: a prompt, workflow, role definit
 - **Goal-first retrieval.** Type an outcome in plain language ("I need AI to help me build an MCP server"); Sparkwell returns one decisive **Best Match**, or honestly says there's no strong match and shows the closest Sparks.
 - **One-click copy.** *Copy Spark* puts the complete stored Spark on the clipboard. Unpinned, the panel then collapses so focus returns to the app you were using — ready for Ctrl+V.
 - **Favorites** for direct, one-click copying of the Sparks you use most.
-- **+ Add New Spark** — paste a Spark and save it. Title and summary are optional (derived from the text if left blank). With a small local model available, *Auto-fill details* drafts a title, summary and tags when you ask; you edit them before saving.
+- **+ Add New Spark** — paste a Spark and save it. Title and summary are optional (derived from the text if left blank). With a local chat model available, *Auto-fill details* drafts a title, summary and tags when you ask; you edit them before saving. The Spark itself is never changed.
 - **Compact panel, docked top-right** on the monitor you're working on: as tall as its content, respecting the taskbar and per-monitor scaling, on frosted glass where Windows 11 supports it. It stays docked. Pin it to keep it on top; unpinned it collapses on Esc, click-away, or after copying.
 - **Your own global shortcut.** On first run Sparkwell asks you to press the shortcut you want (no single combination is free on every machine), validates it, and checks it isn't taken by another app. You can skip and set it later in Settings; the tray icon always opens Sparkwell. If a saved shortcut stops working (another app took it), Sparkwell tells you at startup instead of failing silently.
 - **Local-first.** The library is a single SQLite file on your device. No account, no cloud, no telemetry.
@@ -48,18 +48,19 @@ WebView2 is part of Windows 11; the installer fetches it automatically on system
    ollama pull qwen3-embedding:8b-q8_0
    ```
    It is the one embedding model Sparkwell is calibrated for; other embedding models are not used. It needs about 9 GB of GPU memory while loaded (it stays loaded for 30 minutes after use). Until it is installed, Settings says "Local semantic search is not ready" and searches use standard search.
-3. Optionally pull a small chat model for Auto-fill in Add New Spark. Only small models (up to about 8 B parameters) are used, so drafting takes seconds and doesn't push the embedding model out of memory:
+3. Auto-fill in Add New Spark uses a local chat model you already have: the smallest capable one up to the 14B class (for example `gemma4:12b`, `gemma3:12b`, `qwen3:8b`, `llama3.2`). Larger local models (27B+) and cloud models are never used for it automatically. If none is installed:
    ```powershell
-   ollama pull qwen2.5:3b     # or: ollama pull llama3.2
+   ollama pull gemma3:4b     # or, with a large GPU: ollama pull gemma3:12b
    ```
+   On an RTX 5090, `gemma4:12b` drafts in about a second once loaded (about 3 s from cold, 10–15 s from disk after a reboot); it uses about 8 GB of GPU memory, stays loaded for 5 minutes after use, and fits beside the embedding model.
 
-Sparkwell detects Ollama automatically (it checks in the background and whenever the panel opens), indexes your library in the background (the footer shows "Indexing Sparks…"), and keeps the index current as you add or edit Sparks. Retrieval uses compact retrieval profiles derived from each Spark; the Spark you saved is never changed. There is no model configuration UI by design. `SPARKWELL_CHAT_MODEL` picks the Auto-fill model; `SPARKWELL_EMBED_MODEL` exists for development only (other embedding models are uncalibrated).
+Sparkwell detects Ollama automatically (it checks in the background and whenever the panel opens), indexes your library in the background (the footer shows "Indexing Sparks…"), and keeps the index current as you add or edit Sparks. Retrieval uses compact retrieval profiles derived from each Spark; the Spark you saved is never changed. There is no model configuration UI by design. `SPARKWELL_CHAT_MODEL` picks the Auto-fill model (any installed local chat model; if it isn't one, Settings says so and the automatic choice applies); `SPARKWELL_EMBED_MODEL` exists for development only (other embedding models are uncalibrated).
 
 | Ollama | What you get |
 | --- | --- |
 | Running with `qwen3-embedding:8b-q8_0` | Semantic + lexical hybrid retrieval ("Matched by local intelligence") |
 | Running without it | Standard search, labelled "semantic model not installed" |
-| Running with a small chat model | Auto-fill drafts a title, summary and tags on request |
+| Running with a local chat model up to ~14B | Auto-fill drafts a title, summary and tags on request |
 | Stopped, missing, or busy | Standard search (title, tags, summary, full text); Favorites, Add, Copy, Settings all work |
 
 Sparkwell only talks to `127.0.0.1:11434`, bypasses any proxy, and never uses Ollama "cloud" models, so Spark content does not leave your device.

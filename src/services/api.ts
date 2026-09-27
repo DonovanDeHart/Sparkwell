@@ -86,6 +86,8 @@ export async function listen<T>(event: string, handler: (payload: T) => void): P
 
 export const EVENTS = {
   aiStatus: 'sparkwell://ai-status',
+  /** Auto-fill progress: 'waking' (loading the model), then 'generating'. */
+  drafting: 'sparkwell://drafting',
   libraryChanged: 'sparkwell://library-changed',
   shown: 'sparkwell://shown',
   hidden: 'sparkwell://hidden',

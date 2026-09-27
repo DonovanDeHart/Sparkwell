@@ -48,7 +48,25 @@ const WARM_WINDOW: Duration = Duration::from_secs(25 * 60);
 const POOL_TIMEOUT: Duration = Duration::from_secs(90);
 const FIRST_BATCH_TIMEOUT: Duration = Duration::from_secs(120);
 const BATCH_TIMEOUT: Duration = Duration::from_secs(60);
-const METADATA_TIMEOUT: Duration = Duration::from_secs(60);
+/// Loading the drafting model: gemma4:12b loaded in ~10 s from disk on an
+/// RTX 5090; after a reboot, or while other work holds GPU memory, it can take
+/// several times that. Past this the user is told, and can retry.
+const DRAFT_LOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// Drafting itself: under a second once loaded on an RTX 5090 (~90 tokens);
+/// slower GPUs, or a model partly on the CPU, need longer.
+const DRAFT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Progress of an Auto-fill request, so the editor can say what it waits for.
+pub const EVENT_DRAFTING: &str = "sparkwell://drafting";
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DraftPhase {
+    /// The drafting model is being loaded into memory.
+    Waking,
+    /// The model is writing the title, summary and tags.
+    Generating,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -70,10 +88,12 @@ pub struct AiStatus {
     pub embed_model: Option<String>,
     /// The model semantic search needs, for the "not installed" guidance.
     pub semantic_model: &'static str,
-    /// Small local chat model used by Smart Add (None: Auto-fill unavailable).
+    /// Local chat model used by Smart Add (None: Auto-fill unavailable).
     pub chat_model: Option<String>,
-    /// Local chat models exist but are all too large for Smart Add.
+    /// Local chat models exist but are all above the size Smart Add loads.
     pub chat_models_too_large: bool,
+    /// Why `SPARKWELL_CHAT_MODEL` is being ignored, when it is set.
+    pub chat_override_note: Option<String>,
     /// Sparks with current vectors for `embed_model`.
     pub indexed: usize,
     pub total: usize,
@@ -88,6 +108,7 @@ impl Default for AiStatus {
             semantic_model: models::CANONICAL_EMBED_MODEL,
             chat_model: None,
             chat_models_too_large: false,
+            chat_override_note: None,
             indexed: 0,
             total: 0,
             indexing: false,
@@ -182,14 +203,15 @@ pub async fn refresh<R: Runtime>(app: &AppHandle<R>) {
         .unwrap_or(0)
         .max(0) as usize;
 
-    let (online, embed_model, chat) = match probe {
+    let (online, embed_model, chat_plan) = match probe {
         Ok(models) => (
             true,
             models::pick_embedding_model(&models, env_override("SPARKWELL_EMBED_MODEL").as_deref()),
-            models::pick_chat_model(&models, env_override("SPARKWELL_CHAT_MODEL").as_deref()),
+            models::plan_chat_models(&models, env_override("SPARKWELL_CHAT_MODEL").as_deref()),
         ),
-        Err(_) => (false, None, models::ChatChoice::default()),
+        Err(_) => (false, None, models::ChatPlan::default()),
     };
+    let (chat_model, override_note) = choose_chat_model(&state, &chat_plan).await;
 
     // Keep vectors for the current model even while offline so a brief outage
     // doesn't require reloading; they're simply unused until Ollama returns.
@@ -213,8 +235,9 @@ pub async fn refresh<R: Runtime>(app: &AppHandle<R>) {
         };
         if online {
             s.embed_model = embed_model;
-            s.chat_models_too_large = chat.model.is_none() && chat.skipped_large;
-            s.chat_model = chat.model;
+            s.chat_models_too_large = chat_model.is_none() && chat_plan.skipped_large;
+            s.chat_model = chat_model;
+            s.chat_override_note = override_note;
         }
         s.total = total;
         s.indexed = indexed.min(total);
@@ -222,6 +245,60 @@ pub async fn refresh<R: Runtime>(app: &AppHandle<R>) {
             s.indexing = false;
         }
     });
+}
+
+/// A model's capabilities as Ollama reports them, cached per model name.
+/// `None`: unknown (this Ollama doesn't report them, or it couldn't be asked).
+async fn model_capabilities(state: &AppState, model: &str) -> Option<Vec<String>> {
+    if let Some(known) = state
+        .model_caps
+        .lock()
+        .ok()
+        .and_then(|c| c.get(model).cloned())
+    {
+        return known;
+    }
+    match state.ollama.capabilities(model).await {
+        Ok(caps) => {
+            if let Ok(mut c) = state.model_caps.lock() {
+                c.insert(model.to_string(), caps.clone());
+            }
+            caps
+        }
+        Err(e) => {
+            log::info!("couldn't read the capabilities of {model}: {e}");
+            None
+        }
+    }
+}
+
+/// The first planned chat model that Ollama reports as a text-generation
+/// model, and why `SPARKWELL_CHAT_MODEL` is ignored (if it is).
+async fn choose_chat_model(
+    state: &AppState,
+    plan: &models::ChatPlan,
+) -> (Option<String>, Option<String>) {
+    let mut note = plan.override_issue.clone();
+    for candidate in &plan.candidates {
+        let caps = model_capabilities(state, candidate).await;
+        if models::chat_capable(caps.as_deref()) {
+            return (Some(candidate.clone()), note);
+        }
+        if plan.override_model.as_ref() == Some(candidate) {
+            note = Some(format!("{candidate} isn't a chat model"));
+        }
+    }
+    (None, note)
+}
+
+/// Whether a model reasons before answering unless asked not to.
+fn thinks(state: &AppState, model: &str) -> bool {
+    state
+        .model_caps
+        .lock()
+        .ok()
+        .and_then(|c| c.get(model).cloned().flatten())
+        .is_some_and(|caps| caps.iter().any(|c| c == "thinking"))
 }
 
 /// The views embedded for a Spark (see `search::profile`).
@@ -557,8 +634,9 @@ pub async fn embed_query<R: Runtime>(app: &AppHandle<R>, goal: &str) -> Result<V
     }
 }
 
-/// Proposes title/summary/tags for a Spark body. Never saves anything, and
-/// only runs when the user asks for it.
+/// Proposes title/summary/tags for a Spark body. Never saves anything, never
+/// touches the body, and only runs when the user asks for it. Reports
+/// [`DraftPhase`] progress so a cold model load is visible.
 pub async fn suggest_metadata<R: Runtime>(
     app: &AppHandle<R>,
     body: &str,
@@ -569,43 +647,100 @@ pub async fn suggest_metadata<R: Runtime>(
         (true, Some(m)) => m,
         _ if status.state != AiState::Online => {
             return Err(AppError::Ai(
-                "Local intelligence is offline. Add the details yourself.".into(),
+                "Local drafting is unavailable while local intelligence is offline. Add the details yourself."
+                    .into(),
             ))
         }
         _ => {
             return Err(AppError::Ai(
-                "Auto-fill needs a small local chat model. Add the details yourself.".into(),
+                "Auto-fill needs a local chat model. Add the details yourself.".into(),
             ))
         }
     };
     if body.trim().is_empty() {
         return Err(AppError::Validation("Paste the Spark first.".into()));
     }
+    let started = Instant::now();
+    let warm = state
+        .ollama
+        .chat_model_loaded(&model)
+        .await
+        .unwrap_or(false);
+    if !warm {
+        let _ = app.emit(EVENT_DRAFTING, DraftPhase::Waking);
+        if let Err(e) = state
+            .ollama
+            .load_chat_model(&model, DRAFT_LOAD_TIMEOUT)
+            .await
+        {
+            rewarm(app);
+            return Err(draft_failed(app, e, true));
+        }
+    }
+    let loaded_in = started.elapsed();
+    let _ = app.emit(EVENT_DRAFTING, DraftPhase::Generating);
     let result = state
         .ollama
         .chat_json(
             &model,
             metadata::messages(body),
             metadata::schema(),
-            METADATA_TIMEOUT,
+            thinks(&state, &model),
+            DRAFT_TIMEOUT,
         )
         .await;
-    // Drafting may have pushed the embedding model out of memory; reload it
-    // quietly so the next search isn't cold.
+    // Loading the drafting model may have pushed the embedding model out of
+    // memory; reload it quietly so the next search isn't cold.
     rewarm(app);
-    let content = result.map_err(|e| {
-        if e == OllamaError::Unreachable {
-            set_status(app, |s| s.state = AiState::Offline);
+    let content = result.map_err(|e| draft_failed(app, e, false))?;
+    log::info!(
+        "drafted details with {model} in {:.1}s ({})",
+        started.elapsed().as_secs_f64(),
+        if warm {
+            "model already loaded".to_string()
+        } else {
+            format!("loaded in {:.1}s", loaded_in.as_secs_f64())
         }
-        AppError::Ai(format!(
-            "Couldn't draft details ({e}). You can fill them in yourself."
-        ))
-    })?;
+    );
     metadata::parse(&content).ok_or_else(|| {
         AppError::Ai(
-            "The local model returned something unusable. Fill in the details yourself.".into(),
+            "The local model returned something unusable. Try again, or fill in the details yourself."
+                .into(),
         )
     })
+}
+
+/// What the editor says when drafting fails; the Spark and anything typed
+/// stay as they are, and the user can retry or fill in the details.
+fn draft_failed<R: Runtime>(app: &AppHandle<R>, e: OllamaError, loading: bool) -> AppError {
+    log::warn!(
+        "drafting failed while {}: {e}",
+        if loading {
+            "loading the model"
+        } else {
+            "drafting"
+        }
+    );
+    let message = match e {
+        OllamaError::Unreachable => {
+            set_status(app, |s| s.state = AiState::Offline);
+            "Local intelligence went offline. Fill in the details yourself."
+        }
+        OllamaError::Timeout if loading => {
+            "The local drafting model took too long to load. Try again, or fill in the details yourself."
+        }
+        OllamaError::Timeout => {
+            "Drafting took too long. Try again, or fill in the details yourself."
+        }
+        OllamaError::ModelMissing => {
+            wake(app);
+            "The drafting model is no longer installed. Fill in the details yourself."
+        }
+        OllamaError::BadResponse(_) => {
+            "Couldn't draft details. Try again, or fill in the details yourself."
+        }
+    };
+    AppError::Ai(message.into())
 }
 
 fn rewarm<R: Runtime>(app: &AppHandle<R>) {

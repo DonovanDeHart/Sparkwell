@@ -6,13 +6,14 @@ What was verified for the MVP, and how. The technical spec's rule is that the sh
 
 | Suite | Command | Covers |
 | --- | --- | --- |
-| Rust unit tests (111) | `cd src-tauri && cargo test` | Everything listed in previous rounds, plus: canonical embedding-model policy (never substitutes another model, never a chat model), Qwen3 query instruction and plain documents, labelled profiles, switching models invalidates only the vector cache (and records model, recipe and dimensions), Spark bodies stored exactly as given |
+| Rust unit tests (115) | `cd src-tauri && cargo test` | Everything listed in previous rounds, plus: canonical embedding-model policy (never substitutes another model, never a chat model), Qwen3 query instruction and plain documents, labelled profiles, switching models invalidates only the vector cache (and records model, recipe and dimensions), Spark bodies stored exactly as given, Auto-fill model policy (the 12B model on the acceptance workstation; never 27B+, cloud or embedding models; override and capability checks), drafted tags cleaned to 3–6 Title Case tags without generic ones |
 | Window configuration (2) | `cargo test --test window_config` | Window created unfocused; WebView2 general autofill off |
 | User-added Sparks (3) | `cargo test --test user_added_sparks` | Five pasted "premium" prompts (CRLF, tabs, emoji, leading/trailing whitespace) stored and copied byte for byte; retrieval profiles separate from the body; editing details or drafting metadata never touches the body |
 | Semantic regression (2) | `cargo test --test semantic_regression` | Recorded `qwen3-embedding:8b-q8_0` vectors (215 texts) replayed in CI: zero confidently wrong Best Matches across all 101 goals (and the 12 acceptance goals again with the user-added Sparks present) and 16 unrelated goals; floors at the recorded results (acceptance 8 correct, dev 26, validation 10, test 10, user-added 10/10); f16 round trip |
-| UI behaviour tests (48) | `npm test` | As before, plus: semantic model not installed (label, Settings guidance, library still usable), Ollama offline, indexing progress, a pasted Spark saved and copied exactly as written |
+| UI behaviour tests (50) | `npm test` | As before, plus: semantic model not installed (label, Settings guidance, library still usable), Ollama offline, indexing progress, a pasted Spark saved and copied exactly as written, Auto-fill "Waking up local drafting model…" then "Generating details…" with the Spark unchanged, a failed Auto-fill keeping the Spark and typed details and offering Retry, only models above the limit installed |
 | Keyboard helpers | `npm test` | Key-code → accelerator mapping, modifier ordering, keycap labels |
 | Static checks | `npm run typecheck`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | Types, formatting, lints |
+| Live Auto-fill suite (opt-in) | `cargo test --test drafting_live -- --ignored --nocapture` | Drafts details with the chat model Sparkwell would choose (RTX 5090: `gemma4:12b`) for six Spark types (video, long structured, coding, research, AI agent, writing), starting cold; saves each with its drafted details and checks the stored and copied body byte for byte. Measured: cold 3.4 s (2.3 s loading), warm 0.95 s median; 3–6 Title Case tags each |
 | Live semantic suite (opt-in) | `cargo test --test semantic_live semantic_retrieval_quality -- --ignored --nocapture` | The same suites against a live Ollama with `qwen3-embedding:8b-q8_0` (RTX 5090, Ollama 0.34.4): acceptance 8 correct · 4 acceptable · 0 missed · 0 confidently wrong; dev 26 · 10 · 0 · 0; validation 10 · 12 · 1 · 0; test 10 · 10 · 0 · 0; user-added 10 · 0 · 0 · 0; no unrelated goal confident. Indexing 17 Sparks (45 views) 1.8 s, warm query 22 ms median |
 
 `cargo test --test semantic_tune -- --ignored --nocapture` sweeps the calibration (tuning + validation goals only).
@@ -94,7 +95,6 @@ These still need a person at the machine (the logic behind each is covered by th
 
 - Typing, Esc, clicks and dragging in the new build (no input was injected in the local run): Esc closing Settings and the editor, the header not dragging, Enter again copying while OpenWhispr owns `Ctrl+Enter`.
 - The first-run welcome and the installed NSIS package on this machine (CI covers both on a clean runner).
-- Auto-fill with a small local model: this machine only has chat models above the size limit, so Auto-fill is disabled with an explanation there.
 - Mixed-DPI multi-monitor setups and 125/150/200% scaling in the running app (dock geometry is unit-tested per scale).
 - How the frosted glass reads over bright and busy backgrounds, and with Windows transparency effects turned off (the panel is then opaque).
 

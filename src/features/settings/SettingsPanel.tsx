@@ -34,9 +34,13 @@ function intelligenceText(ai: AiStatus): { title: string; detail: string | null;
     title: ai.indexing
       ? `Local intelligence ready · indexing ${ai.indexed}/${ai.total}`
       : 'Local intelligence ready · semantic search active',
-    detail: ai.chatModel
-      ? `Auto-fill in Add New Spark drafts titles, summaries and tags with ${ai.chatModel}.`
-      : `Auto-fill in Add New Spark needs a ${ai.chatModelsTooLarge ? 'smaller' : 'small'} local model (for example: ollama pull qwen2.5:3b).`,
+    detail:
+      (ai.chatModel
+        ? `Auto-fill in Add New Spark drafts titles, summaries and tags with ${ai.chatModel}.`
+        : ai.chatModelsTooLarge
+          ? 'Auto-fill in Add New Spark loads local models up to about 14B parameters (for example: ollama pull gemma3:12b).'
+          : 'Auto-fill in Add New Spark needs a local chat model (for example: ollama pull gemma3:4b).') +
+      (ai.chatOverrideNote ? ` SPARKWELL_CHAT_MODEL ignored: ${ai.chatOverrideNote}.` : ''),
     ready: true,
   };
 }

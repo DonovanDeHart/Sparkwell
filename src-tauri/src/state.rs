@@ -1,5 +1,6 @@
 //! Process-wide state managed by Tauri.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
@@ -45,6 +46,8 @@ pub struct AppState {
     /// Until when the embedding model is believed to be loaded in Ollama.
     pub embed_warm_until: Mutex<Option<Instant>>,
     pub ai: Mutex<AiStatus>,
+    /// Model capabilities reported by Ollama (`None`: not reported).
+    pub model_caps: Mutex<HashMap<String, Option<Vec<String>>>>,
     pub ai_wake: tokio::sync::Notify,
     pub ollama: OllamaClient,
     pub hotkey: Mutex<HotkeyStatus>,
@@ -69,6 +72,7 @@ impl AppState {
             pool: Mutex::new(None),
             embed_warm_until: Mutex::new(None),
             ai: Mutex::new(AiStatus::default()),
+            model_caps: Mutex::new(HashMap::new()),
             ai_wake: tokio::sync::Notify::new(),
             ollama: OllamaClient::default(),
             hotkey: Mutex::new(hotkey),

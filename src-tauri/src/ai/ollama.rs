@@ -13,8 +13,16 @@ pub const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
 /// Keep the (small) embedding model resident so searches stay fast between
 /// invocations; a cold load is what makes the first search slow.
 const EMBED_KEEP_ALIVE: &str = "30m";
-/// Smart Add is occasional: release the chat model's memory soon after.
-const CHAT_KEEP_ALIVE: &str = "2m";
+/// Smart Add is occasional but often comes in runs (adding several Sparks):
+/// keep the chat model for a few minutes, then release its memory.
+const CHAT_KEEP_ALIVE: &str = "5m";
+/// Context for drafting: the system prompt, up to ~8,000 characters of the
+/// Spark and a short JSON answer fit comfortably. Fixed, so a preloaded model
+/// is reused as is (a different context would make Ollama reload it) and its
+/// memory use is predictable (gemma4:12b: ~8 GB).
+pub const DRAFT_CONTEXT: u32 = 8192;
+/// A title, summary and tags take ~100 tokens; this bounds a runaway answer.
+const DRAFT_MAX_TOKENS: u32 = 512;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum OllamaError {
@@ -71,6 +79,25 @@ struct TagModel {
 struct TagDetails {
     #[serde(default)]
     parameter_size: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ShowResponse {
+    #[serde(default)]
+    capabilities: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct PsResponse {
+    #[serde(default)]
+    models: Vec<PsModel>,
+}
+
+#[derive(Deserialize)]
+struct PsModel {
+    name: String,
+    #[serde(default)]
+    context_length: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -185,27 +212,96 @@ impl OllamaClient {
         Ok(body.embeddings)
     }
 
+    /// What a model can do (`completion`, `embedding`, `thinking`, …), from
+    /// `/api/show`. `None` when this Ollama doesn't report capabilities.
+    pub async fn capabilities(&self, model: &str) -> Result<Option<Vec<String>>, OllamaError> {
+        let resp = self
+            .http
+            .post(format!("{}/api/show", self.base))
+            .timeout(Duration::from_secs(5))
+            .json(&json!({ "model": model }))
+            .send()
+            .await
+            .map_err(OllamaError::from_reqwest)?;
+        let show: ShowResponse = Self::check(resp)
+            .await?
+            .json()
+            .await
+            .map_err(OllamaError::from_reqwest)?;
+        Ok(show.capabilities)
+    }
+
+    /// Whether `model` is loaded with the drafting context, i.e. a draft
+    /// request would not have to load it first.
+    pub async fn chat_model_loaded(&self, model: &str) -> Result<bool, OllamaError> {
+        let resp = self
+            .http
+            .get(format!("{}/api/ps", self.base))
+            .timeout(Duration::from_millis(1500))
+            .send()
+            .await
+            .map_err(OllamaError::from_reqwest)?;
+        let ps: PsResponse = Self::check(resp)
+            .await?
+            .json()
+            .await
+            .map_err(OllamaError::from_reqwest)?;
+        Ok(ps
+            .models
+            .iter()
+            .any(|m| m.name == model && m.context_length.map_or(true, |c| c == DRAFT_CONTEXT)))
+    }
+
+    /// Loads the drafting model (an empty `/api/generate` only loads it), so
+    /// loading and drafting can be reported separately.
+    pub async fn load_chat_model(&self, model: &str, timeout: Duration) -> Result<(), OllamaError> {
+        let resp = self
+            .http
+            .post(format!("{}/api/generate", self.base))
+            .timeout(timeout)
+            .json(&json!({
+                "model": model,
+                "keep_alive": CHAT_KEEP_ALIVE,
+                "options": { "num_ctx": DRAFT_CONTEXT },
+            }))
+            .send()
+            .await
+            .map_err(OllamaError::from_reqwest)?;
+        Self::check(resp).await.map(|_| ())
+    }
+
     /// Non-streaming `/api/chat` constrained to a JSON schema. Returns the raw
-    /// message content for the caller to validate.
+    /// message content for the caller to validate. `thinking` models are asked
+    /// not to think: left to itself gemma4:12b spent a minute and its whole
+    /// context reasoning about a one-line title, and answered nothing.
     pub async fn chat_json(
         &self,
         model: &str,
         messages: Value,
         schema: Value,
+        thinking: bool,
         timeout: Duration,
     ) -> Result<String, OllamaError> {
+        let mut request = json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+            "format": schema,
+            "keep_alive": CHAT_KEEP_ALIVE,
+            "options": {
+                "temperature": 0.2,
+                "num_ctx": DRAFT_CONTEXT,
+                "num_predict": DRAFT_MAX_TOKENS,
+            },
+        });
+        if thinking {
+            request["think"] = json!(false);
+        }
         let resp = self
             .http
             .post(format!("{}/api/chat", self.base))
             .timeout(timeout)
-            .json(&json!({
-                "model": model,
-                "messages": messages,
-                "stream": false,
-                "format": schema,
-                "keep_alive": CHAT_KEEP_ALIVE,
-                "options": { "temperature": 0.2 },
-            }))
+            .json(&request)
             .send()
             .await
             .map_err(OllamaError::from_reqwest)?;

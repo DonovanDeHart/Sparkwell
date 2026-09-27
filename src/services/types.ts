@@ -45,15 +45,20 @@ export interface SearchOutcome {
 
 export type AiState = 'checking' | 'online' | 'offline';
 
+/** What Auto-fill is waiting for: loading the local model, then drafting. */
+export type DraftPhase = 'waking' | 'generating';
+
 export interface AiStatus {
   state: AiState;
   embedModel: string | null;
   /** The model semantic search needs (shown when it isn't installed). */
   semanticModel: string;
-  /** Small local chat model used by Auto-fill; null when unavailable. */
+  /** Local chat model used by Auto-fill; null when unavailable. */
   chatModel: string | null;
-  /** Local chat models exist but all are too large for quick drafting. */
+  /** Local chat models exist but all are above the size Auto-fill loads. */
   chatModelsTooLarge: boolean;
+  /** Why SPARKWELL_CHAT_MODEL is being ignored, when it is set. */
+  chatOverrideNote: string | null;
   indexed: number;
   total: number;
   indexing: boolean;

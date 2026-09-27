@@ -3,8 +3,8 @@ import { NO_AUTOFILL } from '../../components/fields';
 import { Icon } from '../../components/Icon';
 import { IconButton } from '../../components/IconButton';
 import { Toggle } from '../../components/Toggle';
-import { api, toApiError } from '../../services/api';
-import { smartAddReady, type AiStatus, type SparkSummary } from '../../services/types';
+import { api, EVENTS, listen, toApiError } from '../../services/api';
+import { smartAddReady, type AiStatus, type DraftPhase, type SparkSummary } from '../../services/types';
 import './editor.css';
 
 const MAX_TAGS = 8;
@@ -29,21 +29,29 @@ interface Draft {
 
 const EMPTY: Draft = { body: '', title: '', summary: '', tags: [], favorite: false };
 
-/** A small model that drafts quickly without pushing the embedding model out of memory. */
-const SMALL_MODEL_HINT = 'ollama pull qwen2.5:3b';
+/** Local chat models Auto-fill could use, for when none is installed. */
+const MODEL_HINT = 'ollama pull gemma3:4b';
+const MID_SIZE_MODEL_HINT = 'ollama pull gemma3:12b';
+
+const PHASE_TEXT: Record<DraftPhase, string> = {
+  waking: 'Waking up local drafting model…',
+  generating: 'Generating details…',
+};
 
 /** Why Auto-fill can't run right now, or null when it can. */
 function autoFillUnavailable(ai: AiStatus): { text: string; command?: string } | null {
   if (smartAddReady(ai)) return null;
   if (ai.state === 'checking') return { text: 'Checking for local intelligence…' };
   if (ai.state === 'offline')
-    return { text: 'Auto-fill uses local intelligence (Ollama), which is offline. The details are optional.' };
+    return {
+      text: 'Local drafting is unavailable while local intelligence (Ollama) is offline. The details are optional — you can still save.',
+    };
   if (ai.chatModelsTooLarge)
     return {
-      text: 'Your local models are too large for quick drafting. A small one enables Auto-fill:',
-      command: SMALL_MODEL_HINT,
+      text: 'Auto-fill loads local models up to about 14B parameters, and yours are larger. A mid-size one enables it:',
+      command: MID_SIZE_MODEL_HINT,
     };
-  return { text: 'Auto-fill needs a small local model:', command: SMALL_MODEL_HINT };
+  return { text: 'Auto-fill needs a local chat model:', command: MODEL_HINT };
 }
 
 function addTags(existing: string[], raw: string): string[] {
@@ -69,7 +77,9 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
   const [duplicateOf, setDuplicateOf] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [drafting, setDrafting] = useState(false);
+  // What Auto-fill is doing (null: idle); a failed attempt offers Retry.
+  const [phase, setPhase] = useState<DraftPhase | null>(null);
+  const [draftFailed, setDraftFailed] = useState(false);
   const [draftNote, setDraftNote] = useState<string | null>(null);
   const draftRequest = useRef(0);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
@@ -77,6 +87,12 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
   draftRef.current = draft;
 
   const unavailable = autoFillUnavailable(ai);
+
+  // Progress from the core while a request runs (loading the model, then drafting).
+  useEffect(() => {
+    const sub = listen<DraftPhase>(EVENTS.drafting, (next) => setPhase((current) => (current === null ? null : next)));
+    return () => void sub.then((un) => un()).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (mode.kind !== 'edit') {
@@ -132,7 +148,8 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
       if (!body.trim()) return;
       const id = ++draftRequest.current;
       const before = draftRef.current;
-      setDrafting(true);
+      setPhase('generating');
+      setDraftFailed(false);
       setDraftNote(null);
       try {
         const s = await api.suggestMetadata(body);
@@ -147,9 +164,10 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
         setDraftNote('Details drafted locally — edit anything before saving.');
       } catch (err) {
         if (draftRequest.current !== id) return;
+        setDraftFailed(true);
         setDraftNote(toApiError(err).message);
       } finally {
-        if (draftRequest.current === id) setDrafting(false);
+        if (draftRequest.current === id) setPhase(null);
       }
     },
     [],
@@ -157,7 +175,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
 
   const cancelSmartAdd = () => {
     draftRequest.current++;
-    setDrafting(false);
+    setPhase(null);
     setDraftNote(null);
   };
 
@@ -278,10 +296,10 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
             </div>
 
             <div className="smart-add" aria-live="polite">
-              {drafting ? (
+              {phase ? (
                 <>
                   <span className="spinner" aria-hidden="true" />
-                  <span className="smart-add-text">Drafting title, summary & tags locally…</span>
+                  <span className="smart-add-text">{PHASE_TEXT[phase]}</span>
                   <button type="button" className="button is-quiet smart-add-cancel" onClick={cancelSmartAdd}>
                     Cancel
                   </button>
@@ -296,7 +314,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                     aria-describedby="smart-add-status"
                     onClick={() => void runSmartAdd(draft.body)}
                   >
-                    <Icon name="sparkle" size={16} /> Auto-fill details
+                    <Icon name="sparkle" size={16} /> {draftFailed ? 'Retry Auto-fill' : 'Auto-fill details'}
                   </button>
                   <span id="smart-add-status" className="smart-add-text">
                     {unavailable ? (
@@ -310,7 +328,7 @@ export function SparkEditor({ mode, ai, onClose, onSaved, onDeleted }: SparkEdit
                         )}
                       </>
                     ) : (
-                      (draftNote ?? (draft.body.trim() ? null : 'Paste the Spark first, then draft its details.'))
+                      (draftNote ?? (draft.body.trim() ? 'Local drafting ready' : 'Paste the Spark first, then draft its details.'))
                     )}
                   </span>
                 </>

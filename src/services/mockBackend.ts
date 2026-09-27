@@ -230,6 +230,7 @@ export function createMockBackend() {
     semanticModel: 'qwen3-embedding:8b-q8_0',
     chatModel: null,
     chatModelsTooLarge: false,
+    chatOverrideNote: null,
     indexed: 0,
     total: 0,
     indexing: false,
@@ -422,7 +423,10 @@ export function createMockBackend() {
     },
     suggest_metadata: ({ body }) => {
       if (!(ai.state === 'online' && ai.chatModel))
-        throw { kind: 'ai', message: 'Local intelligence is offline. Add the details yourself.' };
+        throw {
+          kind: 'ai',
+          message: 'Local drafting is unavailable while local intelligence is offline. Add the details yourself.',
+        };
       const text = String(body);
       const words = tokenize(text).filter((w) => !STOPWORDS.has(w) && w.length > 3);
       const title = words

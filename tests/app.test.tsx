@@ -293,7 +293,9 @@ describe('Add New Spark', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Add New Spark' });
     // Auto-fill is always offered, and says why it can't run.
     expect(within(dialog).getByRole('button', { name: /Auto-fill details/ })).toBeDisabled();
-    expect(within(dialog).getByText(/Auto-fill uses local intelligence \(Ollama\), which is offline/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/Local drafting is unavailable while local intelligence \(Ollama\) is offline/),
+    ).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText(/^Spark/), 'You are a Kubernetes expert. Diagnose my cluster.');
     await user.type(within(dialog).getByLabelText(/^Title/), 'Kubernetes Doctor');
     await user.type(within(dialog).getByLabelText(/^Tags/), 'DevOps{Enter}k8s,');
@@ -407,7 +409,7 @@ describe('Add New Spark', () => {
 
   it('drafts editable metadata only when asked, never on paste', async () => {
     const user = await renderApp();
-    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: 'qwen2.5:3b' }));
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: 'gemma4:12b' }));
     await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
     const dialog = await screen.findByRole('dialog');
     const body = within(dialog).getByLabelText(/^Spark/);
@@ -417,6 +419,7 @@ describe('Add New Spark', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(calls('suggest_metadata')).toHaveLength(0);
     expect(within(dialog).getByLabelText(/^Title/)).toHaveValue('');
+    expect(within(dialog).getByText('Local drafting ready')).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole('button', { name: /Auto-fill details/ }));
     await waitFor(() => expect(within(dialog).getByLabelText(/^Title/)).not.toHaveValue(''));
@@ -425,7 +428,55 @@ describe('Add New Spark', () => {
     expect(calls('create_spark')).toHaveLength(0);
   });
 
-  it('explains that Auto-fill needs a small model when only large ones are installed', async () => {
+  it('shows the drafting model waking up, then fills the details without touching the Spark', async () => {
+    const user = await renderApp();
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: 'gemma4:12b' }));
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    const dialog = await screen.findByRole('dialog');
+    const body = within(dialog).getByLabelText(/^Spark/);
+    await waitFor(() => expect(body).toHaveFocus());
+    const pasted = '\n  A cinematic, loopable video of a Gold Rush town at dusk.\n\n\t- 35mm look, film grain  \n';
+    await user.paste(pasted);
+    mock.delay('suggest_metadata', 300);
+    await user.click(within(dialog).getByRole('button', { name: /Auto-fill details/ }));
+    act(() => mock.emit('sparkwell://drafting', 'waking'));
+    expect(await within(dialog).findByText('Waking up local drafting model…')).toBeInTheDocument();
+    act(() => mock.emit('sparkwell://drafting', 'generating'));
+    expect(await within(dialog).findByText('Generating details…')).toBeInTheDocument();
+    // The editor stays usable while the model works.
+    expect(within(dialog).getByRole('button', { name: /Save Spark/ })).toBeEnabled();
+    await waitFor(() => expect(within(dialog).getByLabelText(/^Title/)).not.toHaveValue(''));
+    expect(body).toHaveValue(pasted);
+    await user.click(within(dialog).getByRole('button', { name: /Save Spark/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect((calls('create_spark')[0]!.args!.input as { body: string }).body).toBe(pasted);
+  });
+
+  it('keeps the Spark and typed details when Auto-fill fails, and offers Retry', async () => {
+    const user = await renderApp();
+    act(() => mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: 'gemma4:12b' }));
+    await user.click(screen.getByRole('button', { name: /Add New Spark/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/^Spark/), 'Review my pull request for security issues');
+    await user.type(within(dialog).getByLabelText(/^Title/), 'PR Security Review');
+    mock.failNext('suggest_metadata', {
+      kind: 'ai',
+      message: 'The local drafting model took too long to load. Try again, or fill in the details yourself.',
+    });
+    await user.click(within(dialog).getByRole('button', { name: /Auto-fill details/ }));
+    expect(await within(dialog).findByText(/took too long to load/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Spark/)).toHaveValue('Review my pull request for security issues');
+    expect(within(dialog).getByLabelText(/^Title/)).toHaveValue('PR Security Review');
+    const retry = within(dialog).getByRole('button', { name: /Retry Auto-fill/ });
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+    await waitFor(() => expect(within(dialog).getByText(/Details drafted locally/)).toBeInTheDocument());
+    expect(within(dialog).getByLabelText(/^Spark/)).toHaveValue('Review my pull request for security issues');
+    await user.click(within(dialog).getByRole('button', { name: /Save Spark/ }));
+    await waitFor(() => expect(calls('create_spark')).toHaveLength(1));
+  });
+
+  it('explains when every installed chat model is above the size Auto-fill loads', async () => {
     const user = await renderApp();
     act(() =>
       mock.setAi({ state: 'online', embedModel: 'qwen3-embedding:8b-q8_0', chatModel: null, chatModelsTooLarge: true }),
@@ -434,8 +485,12 @@ describe('Add New Spark', () => {
     const dialog = await screen.findByRole('dialog');
     await user.type(within(dialog).getByLabelText(/^Spark/), 'Plan a product launch');
     expect(within(dialog).getByRole('button', { name: /Auto-fill details/ })).toBeDisabled();
-    expect(within(dialog).getByText(/too large for quick drafting/)).toBeInTheDocument();
-    expect(within(dialog).getByText('ollama pull qwen2.5:3b')).toBeInTheDocument();
+    expect(within(dialog).getByText(/up to about 14B parameters, and yours are larger/)).toBeInTheDocument();
+    expect(within(dialog).getByText('ollama pull gemma3:12b')).toBeInTheDocument();
+    // Manual entry and saving still work.
+    await user.type(within(dialog).getByLabelText(/^Title/), 'Launch Plan');
+    await user.click(within(dialog).getByRole('button', { name: /Save Spark/ }));
+    await waitFor(() => expect(calls('create_spark')).toHaveLength(1));
   });
 
   it('edits an existing Spark from the Best Match menu', async () => {

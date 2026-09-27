@@ -23,6 +23,7 @@ const OFFLINE_AI: AiStatus = {
   semanticModel: 'qwen3-embedding:8b-q8_0',
   chatModel: null,
   chatModelsTooLarge: false,
+  chatOverrideNote: null,
   indexed: 0,
   total: 0,
   indexing: false,
