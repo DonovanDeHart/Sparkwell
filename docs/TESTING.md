@@ -6,7 +6,7 @@ What was verified for the MVP, and how. The technical spec's rule is that the sh
 
 | Suite | Command | Covers |
 | --- | --- | --- |
-| Rust unit tests (115) | `cd src-tauri && cargo test` | Everything listed in previous rounds, plus: canonical embedding-model policy (never substitutes another model, never a chat model), Qwen3 query instruction and plain documents, labelled profiles, switching models invalidates only the vector cache (and records model, recipe and dimensions), Spark bodies stored exactly as given, Auto-fill model policy (the 12B model on the acceptance workstation; never 27B+, cloud or embedding models; override and capability checks), drafted tags cleaned to 3–6 Title Case tags without generic ones |
+| Rust unit tests (116) | `cd src-tauri && cargo test` | Everything listed in previous rounds, plus: canonical embedding-model policy (never substitutes another model, never a chat model), Qwen3 query instruction and plain documents, labelled profiles, switching models invalidates only the vector cache (and records model, recipe and dimensions), Spark bodies stored exactly as given, Auto-fill model policy (the 12B model on the acceptance workstation; never 27B+, cloud or embedding models; override and capability checks), drafted tags cleaned to 3–6 Title Case tags without generic ones, over-long tags dropped whole rather than cut mid-word |
 | Window configuration (2) | `cargo test --test window_config` | Window created unfocused; WebView2 general autofill off |
 | User-added Sparks (3) | `cargo test --test user_added_sparks` | Five pasted "premium" prompts (CRLF, tabs, emoji, leading/trailing whitespace) stored and copied byte for byte; retrieval profiles separate from the body; editing details or drafting metadata never touches the body |
 | Semantic regression (2) | `cargo test --test semantic_regression` | Recorded `qwen3-embedding:8b-q8_0` vectors (215 texts) replayed in CI: zero confidently wrong Best Matches across all 101 goals (and the 12 acceptance goals again with the user-added Sparks present) and 16 unrelated goals; floors at the recorded results (acceptance 8 correct, dev 26, validation 10, test 10, user-added 10/10); f16 round trip |
@@ -88,6 +88,20 @@ Results are in each CI run (artifact `smoke-artifacts` has screenshots and the a
 ## Visual verification
 
 The UI was compared against the canonical references (UI/UX spec, Reference C) with Chromium screenshots at the real window size, covering: idle, Best Match, copied, no strong match, closest Sparks, semantic label with indexing footer, Add New Spark, Settings, hotkey recording / conflict / saved, and 125% text scaling (no clipping; tags that don't fit drop out whole rather than clipping).
+
+## Auto-fill on the acceptance workstation (RTX 5090, installed NSIS build)
+
+| Check | Result |
+| --- | --- |
+| Auto-fill enabled with the installed `gemma4:12b` (no "too large" message); "Local drafting ready" once a Spark is pasted | ✅ |
+| Pasting the Coulterville video prompt does not start drafting (fields stay empty, no request logged) | ✅ |
+| Cold click → "Waking up local drafting model…" → "Generating details…" → title, summary and tags filled in 3.3–4.1 s (model load 2.3–3.1 s) | ✅ |
+| Drafted: *Western Era Cinematic Video* / "Generates a highly detailed cinematic video prompt for a 1880s Western setting…" / Video Generation · Western History · Cinematic Style · Atmospheric Worldbuilding | ✅ (the last tag was cut to "…Worldbuildin" before the fix) |
+| Saved body byte-identical to the pasted text (537 characters, trailing space and blank lines kept) | ✅ |
+| After two restarts and a reinstall: Spark present; "looping video of an old gold rush town at sunset" → Best Match, "Matched by local intelligence" | ✅ |
+| Copy Spark → clipboard identical to the pasted text | ✅ |
+| Ollama stopped → Auto-fill disabled with "Local drafting is unavailable while local intelligence (Ollama) is offline…", drafted fields kept, Save enabled; restarted → Auto-fill available again | ✅ |
+| `gemma4:12b` (8.1 GB) and `qwen3-embedding:8b-q8_0` (9.7 GB) both stay resident; no cloud model contacted | ✅ |
 
 ## Not yet verified on physical Windows hardware
 

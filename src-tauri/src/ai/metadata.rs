@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::sparks::normalize_tags;
+use crate::sparks::{normalize_tags, MAX_TAG_CHARS};
 
 /// Fits the drafting context (`ollama::DRAFT_CONTEXT`) with room to spare.
 const MAX_BODY_FOR_PROMPT: usize = 8_000;
@@ -132,7 +132,11 @@ pub fn parse(content: &str) -> Option<MetadataSuggestion> {
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
-                .filter_map(|t| t.as_str().map(|s| s.chars().take(24).collect()))
+                // Too long for a tag: dropped whole, never cut mid-word
+                // ("Atmospheric Worldbuilding" once became "…Worldbuildin").
+                .filter_map(Value::as_str)
+                .filter(|s| s.trim().chars().count() <= MAX_TAG_CHARS)
+                .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default();
@@ -184,6 +188,12 @@ mod tests {
                 "State of the Art"
             ]
         );
+    }
+
+    #[test]
+    fn long_tags_are_kept_whole_or_dropped() {
+        let s = parse(r#"{"title":"T","summary":"","tags":["Atmospheric Worldbuilding","Period-Accurate Production Design Details","Cinematic"]}"#).unwrap();
+        assert_eq!(s.tags, vec!["Atmospheric Worldbuilding", "Cinematic"]);
     }
 
     #[test]
